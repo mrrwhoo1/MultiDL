@@ -1,5 +1,15 @@
 import yt_dlp
 import os 
+from urllib.parse import urlparse, urlunparse
+
+
+
+def clean_url(url):
+    parsed = urlparse(url)
+    # Strip query string and fragment, keep scheme + netloc + path only
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
+
+
 
 def download( f, url,progress_hook = None ,output_path = "~/Downloads/multidl"):
     form_at = f
@@ -10,7 +20,8 @@ def download( f, url,progress_hook = None ,output_path = "~/Downloads/multidl"):
         
         if not os.path.exists(expanded_path):
             os.makedirs(expanded_path)
-        url_ = url
+            
+        url_ = clean_url(url)
 
         
 
