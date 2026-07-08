@@ -1,1 +1,31 @@
-.kate-swp
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*$py.class
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+.fletvenv/
+env/
+
+# Flet / Flutter build artifacts
+build/
+flutter/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

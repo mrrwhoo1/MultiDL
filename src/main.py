@@ -21,16 +21,17 @@ class MultiDL:
         self.text_scale_size()
         self.page.update()
 
-    def play_video(e, file_path):
+    def play_video(self, file_path):
         import subprocess
 
         # On Fedora, 'xdg-open' launches your default video player (like VLC)
         subprocess.Popen(["xdg-open", file_path])
 
-    def load_existing_downloads(self):
-
+    def get_download_items(self):
+        """Reads the downloads folder and returns a fresh list of ListTiles."""
         output_path = "~/Downloads/multidl"
         expanded_path = os.path.expanduser(output_path)
+        items = []
 
         if os.path.exists(expanded_path):
             files = os.listdir(expanded_path)
@@ -46,16 +47,53 @@ class MultiDL:
                     continue
 
                 full_file_path = os.path.join(expanded_path, file_name)
+                items.append(self.make_download_tile(file_name, full_file_path))
 
-                saved_item = ft.ListTile(
-                    leading=ft.Icon(ft.Icons.VIDEO_LIBRARY, color="white"),
-                    title=ft.Text(file_name, color="black", weight="bold", max_lines=1),
-                    subtitle=ft.Text("Saved locally", color="white70", size=11),
-                    trailing=ft.Icon(ft.Icons.CHECK_CIRCLE, color="green"),
-                    on_click=lambda e, path=full_file_path: self.play_video(path),
-                )
+        return items
 
-                self.downloads_list.controls.append(saved_item)
+    def make_download_tile(self, file_name, full_file_path):
+        return ft.ListTile(
+            leading=ft.Icon(ft.Icons.VIDEO_LIBRARY, color="white"),
+            title=ft.Text(file_name, color="black", weight="bold", max_lines=1),
+            subtitle=ft.Text("Saved locally", color="white70", size=11),
+            trailing=ft.Icon(ft.Icons.CHECK_CIRCLE, color="green"),
+            on_click=lambda e, path=full_file_path: self.play_video(path),
+        )
+
+    def load_existing_downloads(self):
+        self.downloads_list.controls = self.get_download_items()
+
+    def open_view_all(self, e):
+        all_view = ft.View(
+            route="/all_downloads",
+            padding=0,
+            controls=[
+                ft.AppBar(
+                    title=ft.Text("All Downloads"),
+                    leading=ft.IconButton(
+                        icon=ft.Icons.ARROW_BACK,
+                        on_click=self.close_view_all,
+                        bgcolor=ft.Colors.TRANSPARENT,
+                    ),
+                ),
+                ft.Container(
+                    expand=True,
+                    padding=10,
+                    image=ft.DecorationImage(src="background.png", fit=ft.BoxFit.COVER),
+                    content=ft.ListView(
+                        controls=self.get_download_items(),  # re-read so it's current
+                        expand=True,
+                        spacing=10,
+                    ),
+                ),
+            ],
+        )
+        self.page.views.append(all_view)
+        self.page.update()
+
+    def close_view_all(self, e):
+        self.page.views.pop()
+        self.page.update()
 
     def Build_UI(self):
         self.URL_Field = ft.TextField(
@@ -130,6 +168,7 @@ class MultiDL:
                 color="black",
             ),
             align=ft.Alignment.CENTER_RIGHT,
+            on_click=self.open_view_all,
         )
         self.r_v = ft.ResponsiveRow(
             controls=[
@@ -250,16 +289,8 @@ class MultiDL:
                 if result and result["success"]:
                     new_video_path = result.get("file_path")
 
-                    new_item = ft.ListTile(
-                        leading=ft.Icon(ft.Icons.VIDEO_LIBRARY, color="white"),
-                        title=ft.Text(
-                            result["title"], color="black", weight="bold", max_lines=1
-                        ),
-                        subtitle=ft.Text(
-                            "Click to play video", color="white70", size=11
-                        ),
-                        trailing=ft.Icon(ft.Icons.CHECK_CIRCLE, color="green"),
-                        on_click=lambda e, path=new_video_path: self.play_video(path),
+                    new_item = self.make_download_tile(
+                        result["title"], new_video_path
                     )
 
                     self.downloads_list.controls.insert(0, new_item)
@@ -311,4 +342,4 @@ class MultiDL:
 
 
 if __name__ == "__main__":
-    ft.app(target=MultiDL, assets_dir="assets")
+    ft.run(main=MultiDL, assets_dir="assets")

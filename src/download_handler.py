@@ -1,12 +1,22 @@
 import yt_dlp
 import os
 from urllib.parse import urlparse, urlunparse
+import sys
+
 
 def clean_url(url):
     parsed = urlparse(url)
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
 
-def download(f, url, progress_hook=None, output_path="~/Downloads/multidl"):
+
+def download(f, url, progress_hook=None, output_path=None):
+
+    if output_path is None:
+        if sys.platform == "android":
+            output_path = "/storage/emulated/0/Download/multidl"
+        else:
+            output_path = "~/Downloads/multidl"
+
     form_at = f
 
     try:
@@ -53,13 +63,11 @@ def download(f, url, progress_hook=None, output_path="~/Downloads/multidl"):
         new_files = after - before
 
         if new_files:
-            # Pick the newest one just in case
             filename = max(
                 [os.path.join(expanded_path, f) for f in new_files],
                 key=os.path.getmtime
             )
         else:
-            # Fallback: grab the most recently modified file in the folder
             all_files = [os.path.join(expanded_path, f) for f in os.listdir(expanded_path)]
             filename = max(all_files, key=os.path.getmtime)
 
@@ -71,7 +79,6 @@ def download(f, url, progress_hook=None, output_path="~/Downloads/multidl"):
     except Exception as e:
         print(f"Error: {e}")
         return {"success": False, "title": str(e)}
-
 
 
 if __name__ == "__main__":
