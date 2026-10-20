@@ -165,3 +165,11 @@ storage/
 __pycache__/
 *.pyc
 .vscode/
+
+# Android / Gradle local files
+android_app/.gradle/
+android_app/**/build/
+android_app/local.properties
+
+# Local backup files
+*.bak
