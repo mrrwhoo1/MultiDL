@@ -284,9 +284,9 @@ def download(f, url, progress_hook=None, output_path=None):
         title_name = safe_filename(info.get("title"), info.get("id", "video"))
 
 
-"""
-TO BE HONEST I MYSELF CAN BARELY UNDERSTAND MOST OF THE CODE BELOW, AUDIO HAS NEVER BEEN MY STRONG SUIT. TRIED TO EXPLAIN AS BEST AS I COULD.
-"""
+        """
+        TO BE HONEST I MYSELF CAN BARELY UNDERSTAND MOST OF THE CODE BELOW, AUDIO HAS NEVER BEEN MY STRONG SUIT. TRIED TO EXPLAIN AS BEST AS I COULD.
+        """
 
 
         # If the "video" file already contains sound, there is nothing to merge.
