@@ -1,7 +1,6 @@
-
 {
-  "versionCode": 2,
-  "versionName": "1.1-test",
+  "versionCode": 1,
+  "versionName": "1.0",
   "downloadUrl": "https://github.com/mrrwhoo1/MultiDL/releases/latest",
-  "releaseNotes": "Test update: checking whether the update dialog works."
+  "releaseNotes": "Initial Android release."
 }
