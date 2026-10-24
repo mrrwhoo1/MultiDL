@@ -68,6 +68,11 @@ import java.io.File
 import java.util.concurrent.Executors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 
 /** Called by yt-dlp on its worker thread; implementations should post UI updates to the main thread. */
 interface DownloadProgressListener {
@@ -234,8 +239,8 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                     MediaStore.MediaColumns.DATE_ADDED
                 )
 
-                val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} = ?"
-                val selectionArgs = arrayOf("Download/MultiDL/")
+                val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
+                val selectionArgs = arrayOf("Download/MultiDL%")
                 val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} DESC"
 
                 val files = mutableListOf<DownloadedMedia>()
@@ -272,8 +277,36 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                 downloadedFiles = files
             }
 
+            // Needed to see files saved by a previous install of the app (see Android scoped storage rules).
+            val storagePermissions = remember {
+                if (Build.VERSION.SDK_INT >= 33) {
+                    arrayOf(
+                        Manifest.permission.READ_MEDIA_VIDEO,
+                        Manifest.permission.READ_MEDIA_AUDIO
+                    )
+                } else {
+                    arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                }
+            }
+
+            val permissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions()
+            ) {
+                // Runs after the user taps Allow or Deny: reload the list either way.
+                refreshDownloads()
+            }
+
             LaunchedEffect(Unit) {
                 refreshDownloads()
+
+                val missing = storagePermissions.any {
+                    ContextCompat.checkSelfPermission(activityContext, it) !=
+                    PackageManager.PERMISSION_GRANTED
+                }
+
+                if (missing) {
+                    permissionLauncher.launch(storagePermissions)
+                }
             }
 
             fun openDownloadedFile(file: DownloadedMedia) {
