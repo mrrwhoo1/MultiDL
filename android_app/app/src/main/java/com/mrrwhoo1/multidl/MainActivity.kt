@@ -151,6 +151,20 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                 }
 
                 setContent {
+                    //======================Update checker
+                    val context = LocalContext.current
+                    var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+
+                    LaunchedEffect(Unit) {
+                        val currentVersionCode = context.packageManager
+                        .getPackageInfo(context.packageName, 0)
+                        .versionCode
+
+                        updateInfo = withContext(Dispatchers.IO) {
+                            UpdateChecker.checkForUpdate(currentVersionCode)
+                        }
+                    }
+                    //==================================
                     val prefs = remember { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
                     var isDark by remember {
                         mutableStateOf(prefs.getBoolean(KEY_DARK_THEME, true))
@@ -164,6 +178,58 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                                 prefs.edit().putBoolean(KEY_DARK_THEME, newValue).apply()
                             }
                         )
+                        //update pop up AletDialog window
+
+                        updateInfo?.let { update ->
+                            androidx.compose.material3.AlertDialog(
+                                onDismissRequest = {
+                                    updateInfo = null
+                                },
+                                title = {
+                                    androidx.compose.material3.Text(
+                                        text = "Update available: ${update.versionName}"
+                                    )
+                                },
+                                text = {
+                                    androidx.compose.material3.Text(
+                                        text = update.releaseNotes.ifBlank {
+                                            "A newer version of MultiDL is available."
+                                        }
+                                    )
+                                },
+                                confirmButton = {
+                                    androidx.compose.material3.TextButton(
+                                        onClick = {
+                                            val intent = Intent(
+                                                Intent.ACTION_VIEW,
+                                                Uri.parse(update.downloadUrl)
+                                            )
+                                            try {
+                                                context.startActivity(intent)
+                                            } catch (_: ActivityNotFoundException) {
+                                                Toast.makeText(
+                                                    context,
+                                                    "Unable to open the download page.",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                            updateInfo = null
+                                        }
+                                    ) {
+                                        androidx.compose.material3.Text("Download")
+                                    }
+                                },
+                                dismissButton = {
+                                    androidx.compose.material3.TextButton(
+                                        onClick = {
+                                            updateInfo = null
+                                        }
+                                    ) {
+                                        androidx.compose.material3.Text("Later")
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }

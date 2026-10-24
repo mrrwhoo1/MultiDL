@@ -8,7 +8,8 @@ authors = [
     { name = "Flet developer", email = "you@example.com" }
 ]
 dependencies = [
-    "flet>=0.84.0"
+    "flet>=0.84.0",
+    "yt-dlp"
 ]
 
 [dependency-groups]
@@ -19,7 +20,7 @@ dev = [
 ]
 
 [tool.flet]
-desktop_flavor = "light"    # Change to "full" to use flet-audio and flet-video
+desktop_flavor = "light"
 org = "com.mycompany"
 product = "universaldownloader"
 company = "Flet"
