@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="android_app/App_Screenshots/Logo/multidl_logo.png" width="160" height="160" alt="MultiDL logo"><br>
-<b><font size="+2">MultiDL</font></b>
-
+<img src="android_app/App_Screenshots/Logo/multidl.png" width="160" height="160" alt="MultiDL logo">
 
 ### Free video and audio downloader. 
 
