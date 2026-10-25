@@ -173,3 +173,7 @@ android_app/local.properties
 
 # Local backup files
 *.bak
+
+#singings
+*.jks
+*.keystore
