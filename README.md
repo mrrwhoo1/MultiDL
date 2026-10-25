@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="src/assets/icon.png" width="160" height="160" alt="MultiDL logo">
+<img src="https://github.com/user-attachments/assets/a62a3ad4-6295-4060-9103-6e833cab8202" width="160" height="160" alt="MultiDL logo">
 
 # MultiDL
 
