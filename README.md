@@ -2,7 +2,6 @@
 
 <img src="android_app/App_Screenshots/Logo/MultiDl_trans.png" width="160" height="160" alt="MultiDL logo">
 
-# MultiDL
 
 ### Free video and audio downloader. 
 
