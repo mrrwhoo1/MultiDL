@@ -1,6 +1,6 @@
-"""
-security focused
-"""
+/*
+ * security focused update
+ */
 package com.mrrwhoo1.multidl
 
 import android.util.Base64
