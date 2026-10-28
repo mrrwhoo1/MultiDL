@@ -3,6 +3,7 @@
  * (FAIRLY EASY).
  * PS: too many imports this is why flutter is goated. (did not use it cause this project would be
  * flutter -> kotlin -> java -> chaquopy -> python)
+UI was completely my design, compile src main(wrote that by hand a while back) for Linux or android(flet) and it's identical. [25-10-26]....src will be changed to Flutter soon. 
  */
 
 package com.mrrwhoo1.multidl
