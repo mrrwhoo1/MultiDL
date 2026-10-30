@@ -32,7 +32,9 @@ APP_VERSION_CODE = 1
 DEVELOPER_NAME = "mrrwhoo"
 GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
 GITHUB_REPO_URL = "https://github.com/mrrwhoo1/MultiDL"
-VERSION_URL = "https://raw.githubusercontent.com/mrrwhoo1/MultiDL/main/version.json"
+VERSION_URL = (
+    "https://raw.githubusercontent.com/mrrwhoo1/MultiDL/main/desktop_version.json"
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(HERE, "assets")
@@ -40,10 +42,10 @@ ASSETS_DIR = os.path.join(HERE, "assets")
 # Desktop layout: at or above WIDE_BREAKPOINT the home screen uses two columns
 # (form on the left, downloads on the right); below it, one column like the phone.
 WIDE_BREAKPOINT = 860
-MAX_HOME_WIDTH = 1200      # widest the two-column home screen gets
-MAX_CONTENT_WIDTH = 720    # widest the single-column screens get
-FORM_COLUMN_WIDTH = 440    # left column of the wide home screen
-WIDE_RECENT_COUNT = 8      # how many recent downloads the wide home screen lists
+MAX_HOME_WIDTH = 1200  # widest the two-column home screen gets
+MAX_CONTENT_WIDTH = 720  # widest the single-column screens get
+FORM_COLUMN_WIDTH = 440  # left column of the wide home screen
+WIDE_RECENT_COUNT = 8  # how many recent downloads the wide home screen lists
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi", ".flv", ".ts"}
 HIDDEN_SUFFIXES = (".part", ".ytdl", ".temp")
@@ -80,8 +82,8 @@ SUCCESS_GREEN = "#66BB6A"
 def blend(fg, bg, alpha):
     """Mix two #RRGGBB colours: `fg` drawn over `bg` with the given opacity.
     (The Android app draws its panels with a little transparency.)"""
-    f = [int(fg[i:i + 2], 16) for i in (1, 3, 5)]
-    b = [int(bg[i:i + 2], 16) for i in (1, 3, 5)]
+    f = [int(fg[i : i + 2], 16) for i in (1, 3, 5)]
+    b = [int(bg[i : i + 2], 16) for i in (1, 3, 5)]
     mixed = [round(f[i] * alpha + b[i] * (1 - alpha)) for i in range(3)]
     return "#{:02X}{:02X}{:02X}".format(*mixed)
 
@@ -119,7 +121,9 @@ def load_settings():
 def save_settings(settings):
     try:
         os.makedirs(config_dir(), exist_ok=True)
-        with open(os.path.join(config_dir(), "settings.json"), "w", encoding="utf-8") as fh:
+        with open(
+            os.path.join(config_dir(), "settings.json"), "w", encoding="utf-8"
+        ) as fh:
             json.dump(settings, fh)
     except Exception:
         pass
@@ -158,7 +162,9 @@ def make_thumbnail(path):
         return None
     try:
         stat = os.stat(path)
-        key = hashlib.sha1(f"{path}|{stat.st_mtime}|{stat.st_size}".encode()).hexdigest()
+        key = hashlib.sha1(
+            f"{path}|{stat.st_mtime}|{stat.st_size}".encode()
+        ).hexdigest()
         cache_dir = os.path.join(config_dir(), "thumbs")
         os.makedirs(cache_dir, exist_ok=True)
         cached = os.path.join(cache_dir, key + ".jpg")
@@ -167,10 +173,21 @@ def make_thumbnail(path):
             for seek in ("1", "0"):
                 subprocess.run(
                     [
-                        ffmpeg, "-y", "-loglevel", "error", "-ss", seek, "-i", path,
-                        "-frames:v", "1",
-                        "-vf", "scale=164:124:force_original_aspect_ratio=increase,crop=164:124",
-                        "-q:v", "4", cached,
+                        ffmpeg,
+                        "-y",
+                        "-loglevel",
+                        "error",
+                        "-ss",
+                        seek,
+                        "-i",
+                        path,
+                        "-frames:v",
+                        "1",
+                        "-vf",
+                        "scale=164:124:force_original_aspect_ratio=increase,crop=164:124",
+                        "-q:v",
+                        "4",
+                        cached,
                     ],
                     stdin=subprocess.DEVNULL,
                     capture_output=True,
@@ -359,7 +376,9 @@ class MultiDL:
         self.was_wide = self._is_wide()
         wide_home = self.screen == "home" and self.was_wide
         self.content_box.width = self._content_width()
-        self.content_box.padding = ft.Padding.symmetric(horizontal=32 if wide_home else 20)
+        self.content_box.padding = ft.Padding.symmetric(
+            horizontal=32 if wide_home else 20
+        )
         self.content_box.content = builders[self.screen]()
         self.page.update()
         self._start_thumbnails()
@@ -384,7 +403,8 @@ class MultiDL:
                             "path": path,
                             "size": stat.st_size,
                             "mtime": stat.st_mtime,
-                            "is_video": os.path.splitext(name)[1].lower() in VIDEO_EXTENSIONS,
+                            "is_video": os.path.splitext(name)[1].lower()
+                            in VIDEO_EXTENSIONS,
                         }
                     )
         except Exception:
@@ -464,7 +484,9 @@ class MultiDL:
     # ------------------------------------------------------------------
     def _check_for_update(self):
         try:
-            request = urllib.request.Request(VERSION_URL, headers={"User-Agent": APP_NAME})
+            request = urllib.request.Request(
+                VERSION_URL, headers={"User-Agent": APP_NAME}
+            )
             with urllib.request.urlopen(request, timeout=5) as response:
                 data = json.loads(response.read().decode("utf-8"))
             code = int(data["versionCode"])
@@ -619,7 +641,9 @@ class MultiDL:
         elif detail.startswith(FFMPEG_MISSING[:20]):
             self.message = detail  # the one failure the user can fix themselves
         else:
-            self.message = "Couldn't complete the download. Check the link and try again."
+            self.message = (
+                "Couldn't complete the download. Check the link and try again."
+            )
         if self.screen in ("home", "all"):
             self.render()
         else:
@@ -740,7 +764,9 @@ class MultiDL:
         )
         cached = self.thumb_cache.get((file["path"], file["mtime"]))
         if cached:
-            thumb_holder.content = ft.Image(src=cached, width=82, height=62, fit=ft.BoxFit.COVER)
+            thumb_holder.content = ft.Image(
+                src=cached, width=82, height=62, fit=ft.BoxFit.COVER
+            )
         else:
             self._thumb_jobs.append((file, thumb_holder))
 
@@ -816,7 +842,9 @@ class MultiDL:
                         controls=[
                             self._text(APP_NAME, 32, weight=ft.FontWeight.BOLD),
                             self._text(
-                                "Download media from your favourite platforms", 14, c["muted"]
+                                "Download media from your favourite platforms",
+                                14,
+                                c["muted"],
                             ),
                         ],
                     ),
@@ -873,7 +901,9 @@ class MultiDL:
                 content=ft.Row(
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
-                        ft.Container(expand=True, content=self._text(self.selected_format, 14)),
+                        ft.Container(
+                            expand=True, content=self._text(self.selected_format, 14)
+                        ),
                         ft.Icon(ft.Icons.KEYBOARD_ARROW_DOWN, color=c["text"], size=24),
                     ],
                 ),
@@ -926,7 +956,9 @@ class MultiDL:
             controls=[
                 ft.Container(
                     expand=True,
-                    content=self._text("Recently downloaded", 18, weight=ft.FontWeight.BOLD),
+                    content=self._text(
+                        "Recently downloaded", 18, weight=ft.FontWeight.BOLD
+                    ),
                 ),
                 ft.Container(
                     border_radius=8,
@@ -974,7 +1006,8 @@ class MultiDL:
                     expand=True,
                     spacing=10,
                     controls=[
-                        self._file_row(f, c["row"]) for f in self.files[:WIDE_RECENT_COUNT]
+                        self._file_row(f, c["row"])
+                        for f in self.files[:WIDE_RECENT_COUNT]
                     ],
                 )
             else:
@@ -1089,7 +1122,9 @@ class MultiDL:
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=10,
                 controls=[
-                    ft.ProgressRing(width=22, height=22, stroke_width=2, color="#FFFFFF"),
+                    ft.ProgressRing(
+                        width=22, height=22, stroke_width=2, color="#FFFFFF"
+                    ),
                     self._text("Downloading...", 14, "#FFFFFF"),
                 ],
             )
@@ -1109,7 +1144,9 @@ class MultiDL:
         )
         controls.append(self._gap(16))
         return ft.Column(
-            spacing=0, horizontal_alignment=ft.CrossAxisAlignment.STRETCH, controls=controls
+            spacing=0,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            controls=controls,
         )
 
     def _refresh_bottom(self):
@@ -1150,7 +1187,11 @@ class MultiDL:
             expand=True,
             spacing=0,
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
-            controls=[self._screen_header("All downloads", subtitle), self._gap(16), body],
+            controls=[
+                self._screen_header("All downloads", subtitle),
+                self._gap(16),
+                body,
+            ],
         )
 
     # ------------------------------------------------------------------
@@ -1224,7 +1265,9 @@ class MultiDL:
                         expand=True,
                         spacing=0,
                         controls=[
-                            self._text("Open-source licences", 16, weight=ft.FontWeight.W_600),
+                            self._text(
+                                "Open-source licences", 16, weight=ft.FontWeight.W_600
+                            ),
                             self._text("View MultiDL's licence", 13, c["muted"]),
                         ],
                     ),
@@ -1239,7 +1282,13 @@ class MultiDL:
             clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
             content=ft.Column(
                 spacing=0,
-                controls=[theme_row, self._divider(), about_row, self._divider(), licences_row],
+                controls=[
+                    theme_row,
+                    self._divider(),
+                    about_row,
+                    self._divider(),
+                    licences_row,
+                ],
             ),
         )
 
@@ -1286,7 +1335,9 @@ class MultiDL:
                     c["muted"],
                 ),
                 self._gap(14),
-                self._filled_button("★  Rate on GitHub", lambda e: webbrowser.open(GITHUB_REPO_URL)),
+                self._filled_button(
+                    "★  Rate on GitHub", lambda e: webbrowser.open(GITHUB_REPO_URL)
+                ),
                 self._gap(10),
                 self._outlined_button(
                     "Developer's GitHub", lambda e: webbrowser.open(GITHUB_PROFILE_URL)
@@ -1366,7 +1417,9 @@ class MultiDL:
             spacing=0,
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
             controls=[
-                self._screen_header("Open-source licences", "MultiDL and third-party software"),
+                self._screen_header(
+                    "Open-source licences", "MultiDL and third-party software"
+                ),
                 self._gap(16),
                 scrolling,
             ],
