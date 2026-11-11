@@ -3,7 +3,7 @@
  * (FAIRLY EASY).
  * PS: too many imports this is why flutter is goated. (did not use it cause this project would be
  * flutter -> kotlin -> java -> chaquopy -> python)
-UI was completely my design, compile src main(wrote that by hand a while back) for Linux or android(flet) and it's identical. [25-10-26]....src will be changed to Flutter soon. 
+ * UI was completely my design, compile src main(wrote that by hand a while back) for Linux or android(flet) and it's identical. [25-10-26]....src will be changed to Flutter soon.
  */
 
 package com.mrrwhoo1.multidl
@@ -286,6 +286,7 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
             var isDownloading by remember { mutableStateOf(false) }
             var downloadProgress by remember { mutableIntStateOf(0) }
             var downloadStatus by remember { mutableStateOf("Preparing download…") }
+            var downloadQueue by remember { mutableStateOf<List<DownloadItem>>(emptyList()) }
             var downloadedFiles by remember {
                 mutableStateOf<List<DownloadedMedia>>(emptyList())
             }
@@ -427,27 +428,31 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                     }
             }
 
-            fun startDownload() {
-                val submittedUrl = url.trim()
+            // The download manager controls the queue. The executor runs the existing
+            // Python downloader away from the main UI thread.
+            val downloadManager = remember {
+                MultiDLDownloadManager(
+                    onQueueChanged = { updatedQueue ->
+                        mainHandler.post {
+                            downloadQueue = updatedQueue
 
-                when {
-                    submittedUrl.isBlank() -> {
-                        message = "Enter a video URL first."
-                    }
+                            val activeDownload = updatedQueue.firstOrNull {
+                                it.state == DownloadState.DOWNLOADING
+                            }
 
-                    !submittedUrl.startsWith("https://") &&
-                    !submittedUrl.startsWith("http://") -> {
-                        message = "Enter a valid URL starting with http:// or https://."
-                    }
+                            isDownloading = activeDownload != null
 
-                    isDownloading -> Unit
-
-                    else -> {
-                        isDownloading = true
-                        downloadProgress = 0
-                        downloadStatus = "Preparing download…"
-                        message = ""
-
+                            if (activeDownload != null) {
+                                downloadProgress = activeDownload.progress
+                                downloadStatus = activeDownload.status
+                            } else if (updatedQueue.none {
+                                it.state == DownloadState.QUEUED
+                            }) {
+                                downloadProgress = 100
+                            }
+                        }
+                    },
+                    onStartDownload = { item, onProgress, onComplete ->
                         downloadExecutor.execute {
                             try {
                                 val python = Python.getInstance()
@@ -460,14 +465,11 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
 
                                 val result: PyObject = downloader.callAttr(
                                     "download",
-                                    selectedFormat,
-                                    submittedUrl,
+                                    item.format,
+                                    item.url,
                                     object : DownloadProgressListener {
                                         override fun onProgress(percent: Int, status: String) {
-                                            mainHandler.post {
-                                                downloadProgress = percent.coerceIn(0, 100)
-                                                downloadStatus = status
-                                            }
+                                            onProgress(percent, status)
                                         }
                                     },
                                     downloadDir.absolutePath
@@ -531,30 +533,51 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                                     }
                                 }
 
-                                mainHandler.post {
-                                    isDownloading = false
-                                    downloadProgress = if (savedToPublicDownloads) 100 else downloadProgress
-                                    downloadStatus = if (savedToPublicDownloads) "Complete" else "Finishing up…"
-
-                                    if (savedToPublicDownloads) {
+                                if (savedToPublicDownloads) {
+                                    mainHandler.post {
                                         refreshDownloads()
                                         message = "Completed"
-                                    } else {
-                                        message = "Couldn't complete the download. Check the link and try again."
                                     }
+                                    onComplete(true, title, null)
+                                } else {
+                                    val error = "Couldn't save the downloaded file to Downloads/MultiDL."
+                                    mainHandler.post {
+                                        message = error
+                                    }
+                                    onComplete(false, title, error)
                                 }
                             } catch (e: Exception) {
+                                val error = e.message ?: "Could not start Python downloader."
                                 mainHandler.post {
-                                    isDownloading = false
-                                    downloadStatus = "Download failed"
-                                    message = "Error: ${e.message ?: "Could not start Python downloader."}"
+                                    message = "Download failed: $error"
                                 }
+                                onComplete(false, "", error)
                             }
                         }
                     }
-                }
+                )
             }
 
+            fun startDownload() {
+                val submittedUrl = url.trim()
+
+                when {
+                    submittedUrl.isBlank() -> {
+                        message = "Enter a video URL first."
+                    }
+
+                    !submittedUrl.startsWith("https://") &&
+                    !submittedUrl.startsWith("http://") -> {
+                        message = "Enter a valid URL starting with http:// or https://."
+                    }
+
+                    else -> {
+                        message = ""
+                        downloadManager.addDownload(submittedUrl, selectedFormat)
+                        url = ""
+                    }
+                }
+            }
 
             // System back gesture: About and Licences return to Settings.
             BackHandler(enabled = screen != Screen.Home) {
@@ -575,6 +598,9 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                         onFormatSelected = { selectedFormat = it },
                         files = downloadedFiles,
                         isDownloading = isDownloading,
+                        queuedDownloads = downloadQueue.count {
+                            it.state == DownloadState.QUEUED
+                        },
                         downloadProgress = downloadProgress,
                         downloadStatus = downloadStatus,
                         message = message,
@@ -649,6 +675,7 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                                onFormatSelected: (String) -> Unit,
                                files: List<DownloadedMedia>,
                                isDownloading: Boolean,
+                               queuedDownloads: Int,
                                downloadProgress: Int,
                                downloadStatus: String,
                                message: String,
@@ -909,6 +936,13 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                              color = colors.muted,
                              fontSize = 13.sp
                         )
+                        if (queuedDownloads > 0) {
+                            Text(
+                                text = "$queuedDownloads waiting in queue",
+                                 color = colors.muted,
+                                 fontSize = 12.sp
+                            )
+                        }
                     }
                 } else if (message.isNotBlank()) {
                     Text(
@@ -921,7 +955,7 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
 
                 Button(
                     onClick = onDownload,
-                    enabled = !isDownloading,
+                    enabled = true,
                     modifier = Modifier
                     .fillMaxWidth()
                     .height(54.dp),
@@ -931,21 +965,11 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                            contentColor = Color.White
                        )
                 ) {
-                    if (isDownloading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                                                  color = Color.White,
-                                                  strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text("Downloading...")
-                    } else {
-                        Text(
-                            text = "Download",
-                             fontSize = 16.sp,
-                             fontWeight = FontWeight.Bold
-                        )
-                    }
+                    Text(
+                        text = if (isDownloading) "Add to queue" else "Download",
+                         fontSize = 16.sp,
+                         fontWeight = FontWeight.Bold
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
