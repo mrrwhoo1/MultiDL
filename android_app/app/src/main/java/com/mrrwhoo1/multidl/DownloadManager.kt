@@ -9,7 +9,9 @@ enum class DownloadState {
     QUEUED,
     DOWNLOADING,
     COMPLETED,
-    FAILED
+    FAILED,
+    // Not used yet: reserved for the upcoming Pause / Resume feature.
+    PAUSED
 }
 
 /**
@@ -17,14 +19,23 @@ enum class DownloadState {
  */
 data class DownloadItem(
     val id: String = UUID.randomUUID().toString(),
-    val url: String,
-    val format: String,
-    var title: String = "",
-    var progress: Int = 0,
-    var status: String = "Queued",
-    var state: DownloadState = DownloadState.QUEUED,
-    var error: String? = null
+                        val url: String,
+                        val format: String,
+                        var title: String = "",
+                        var progress: Int = 0,
+                        var status: String = "Queued",
+                        var state: DownloadState = DownloadState.QUEUED,
+                        var error: String? = null
 )
+
+/**
+ * True while a download still needs work: waiting in the queue, running, or paused.
+ * The Downloads badge and the Downloads screen both use this, so they always agree.
+ */
+fun DownloadItem.isUnfinished(): Boolean =
+state == DownloadState.QUEUED ||
+state == DownloadState.DOWNLOADING ||
+state == DownloadState.PAUSED
 
 /**
  * Manages the MultiDL download queue.
@@ -34,144 +45,144 @@ data class DownloadItem(
  */
 class MultiDLDownloadManager(
     private val onQueueChanged: (List<DownloadItem>) -> Unit,
-    private val onStartDownload: (
-        item: DownloadItem,
-        onProgress: (Int, String) -> Unit,
-        onComplete: (success: Boolean, title: String, error: String?) -> Unit
-    ) -> Unit
+        private val onStartDownload: (
+            item: DownloadItem,
+            onProgress: (Int, String) -> Unit,
+                                      onComplete: (success: Boolean, title: String, error: String?) -> Unit
+        ) -> Unit
 ) {
 
     private val downloads = mutableListOf<DownloadItem>()
 
     private var currentDownload: DownloadItem? = null
 
-    /**
-     * Adds a new download to the queue.
-     */
-    @Synchronized
-    fun addDownload(url: String, format: String) {
-        val item = DownloadItem(
-            url = url,
-            format = format
-        )
+        /**
+         * Adds a new download to the queue.
+         */
+        @Synchronized
+        fun addDownload(url: String, format: String) {
+            val item = DownloadItem(
+                url = url,
+                format = format
+            )
 
-        downloads.add(item)
-        notifyQueueChanged()
+            downloads.add(item)
+            notifyQueueChanged()
 
-        startNextDownload()
-    }
-
-    /**
-     * Returns a copy of all downloads.
-     */
-    @Synchronized
-    fun getDownloads(): List<DownloadItem> {
-        return downloads.toList()
-    }
-
-    /**
-     * Returns the currently active download, if there is one.
-     */
-    @Synchronized
-    fun getCurrentDownload(): DownloadItem? {
-        return currentDownload
-    }
-
-    /**
-     * Starts the next queued download if nothing is currently downloading.
-     */
-    @Synchronized
-    private fun startNextDownload() {
-        if (currentDownload != null) {
-            return
+            startNextDownload()
         }
 
-        val nextDownload = downloads.firstOrNull {
-            it.state == DownloadState.QUEUED
-        } ?: return
+        /**
+         * Returns a copy of all downloads.
+         */
+        @Synchronized
+        fun getDownloads(): List<DownloadItem> {
+            return downloads.toList()
+        }
 
-        currentDownload = nextDownload
-        nextDownload.state = DownloadState.DOWNLOADING
-        nextDownload.status = "Preparing download…"
-        nextDownload.progress = 0
+        /**
+         * Returns the currently active download, if there is one.
+         */
+        @Synchronized
+        fun getCurrentDownload(): DownloadItem? {
+            return currentDownload
+        }
 
-        notifyQueueChanged()
-
-        onStartDownload(
-            nextDownload,
-
-            { percent, status ->
-                updateProgress(nextDownload.id, percent, status)
-            },
-
-            { success, title, error ->
-                completeDownload(
-                    id = nextDownload.id,
-                    success = success,
-                    title = title,
-                    error = error
-                )
+        /**
+         * Starts the next queued download if nothing is currently downloading.
+         */
+        @Synchronized
+        private fun startNextDownload() {
+            if (currentDownload != null) {
+                return
             }
-        )
-    }
 
-    /**
-     * Updates the progress of a download.
-     */
-    @Synchronized
-    private fun updateProgress(
-        id: String,
-        percent: Int,
-        status: String
-    ) {
-        val item = downloads.find { it.id == id } ?: return
+            val nextDownload = downloads.firstOrNull {
+                it.state == DownloadState.QUEUED
+            } ?: return
 
-        item.progress = percent.coerceIn(0, 100)
-        item.status = status
+            currentDownload = nextDownload
+            nextDownload.state = DownloadState.DOWNLOADING
+            nextDownload.status = "Preparing download…"
+            nextDownload.progress = 0
 
-        notifyQueueChanged()
-    }
+            notifyQueueChanged()
 
-    /**
-     * Marks a download as completed or failed.
-     * The next queued download will then start automatically.
-     */
-    @Synchronized
-    private fun completeDownload(
-        id: String,
-        success: Boolean,
-        title: String,
-        error: String?
-    ) {
-        val item = downloads.find { it.id == id } ?: return
+            onStartDownload(
+                nextDownload,
 
-        if (title.isNotBlank()) {
-            item.title = title
+                { percent, status ->
+                    updateProgress(nextDownload.id, percent, status)
+                },
+
+                { success, title, error ->
+                    completeDownload(
+                        id = nextDownload.id,
+                        success = success,
+                        title = title,
+                        error = error
+                    )
+                }
+            )
         }
 
-        if (success) {
-            item.state = DownloadState.COMPLETED
-            item.progress = 100
-            item.status = "Completed"
-            item.error = null
-        } else {
-            item.state = DownloadState.FAILED
-            item.status = "Download failed"
-            item.error = error
+        /**
+         * Updates the progress of a download.
+         */
+        @Synchronized
+        private fun updateProgress(
+            id: String,
+            percent: Int,
+            status: String
+        ) {
+            val item = downloads.find { it.id == id } ?: return
+
+            item.progress = percent.coerceIn(0, 100)
+            item.status = status
+
+            notifyQueueChanged()
         }
 
-        currentDownload = null
+        /**
+         * Marks a download as completed or failed.
+         * The next queued download will then start automatically.
+         */
+        @Synchronized
+        private fun completeDownload(
+            id: String,
+            success: Boolean,
+            title: String,
+            error: String?
+        ) {
+            val item = downloads.find { it.id == id } ?: return
 
-        notifyQueueChanged()
+            if (title.isNotBlank()) {
+                item.title = title
+            }
 
-        // Automatically move to the next item in the queue.
-        startNextDownload()
-    }
+            if (success) {
+                item.state = DownloadState.COMPLETED
+                item.progress = 100
+                item.status = "Completed"
+                item.error = null
+            } else {
+                item.state = DownloadState.FAILED
+                item.status = "Download failed"
+                item.error = error
+            }
 
-    /**
-     * Sends a copy of the current queue to the UI.
-     */
-    private fun notifyQueueChanged() {
-        onQueueChanged(downloads.toList())
-    }
+            currentDownload = null
+
+            notifyQueueChanged()
+
+            // Automatically move to the next item in the queue.
+            startNextDownload()
+        }
+
+        /**
+         * Sends a copy of the current queue to the UI.
+         */
+        private fun notifyQueueChanged() {
+            onQueueChanged(downloads.toList())
+        }
 }

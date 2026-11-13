@@ -41,6 +41,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
+
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
@@ -74,6 +75,8 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import android.util.Log
+
 
 /** Called by yt-dlp on its worker thread; implementations should post UI updates to the main thread. */
 interface DownloadProgressListener {
@@ -129,7 +132,7 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
 
         private val LocalAppColors = staticCompositionLocalOf { DarkPalette }
 
-        private enum class Screen { Home, AllDownloads, Settings, About, Licences }
+        private enum class Screen { Home, AllDownloads, ActiveDownloads, Settings, About, Licences }
 
         private data class DownloadedMedia(
             val name: String,
@@ -297,7 +300,6 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
 
             fun refreshDownloads() {
                 val resolver = activityContext.contentResolver
-                val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
 
                 val projection = arrayOf(
                     MediaStore.MediaColumns.DISPLAY_NAME,
@@ -312,37 +314,58 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                 val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} DESC"
 
                 val files = mutableListOf<DownloadedMedia>()
+                val seenIds = mutableSetOf<Long>()
 
-                resolver.query(
-                    collection,
-                    projection,
-                    selection,
-                    selectionArgs,
-                    sortOrder
-                )?.use { cursor ->
-                    val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
-                    val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-                    val mimeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
-                    val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
-                    val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
+                // After a reinstall Android no longer treats this app as the owner of its old
+                // files. With the media permission they are visible as video/audio, so the
+                // Video and Audio collections are scanned as well as Downloads. The same file
+                // can appear in more than one collection, so duplicates are skipped by _ID.
+                val collections = listOf(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                )
 
-                    while (cursor.moveToNext()) {
-                        val name = cursor.getString(nameColumn) ?: continue
-                        val id = cursor.getLong(idColumn)
+                for (collection in collections) {
+                    try {
+                        resolver.query(
+                            collection,
+                            projection,
+                            selection,
+                            selectionArgs,
+                            sortOrder
+                        )?.use { cursor ->
+                            val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                            val mimeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+                            val sizeColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                            val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
 
-                        files.add(
-                            DownloadedMedia(
-                                name = name,
-                                uri = android.content.ContentUris.withAppendedId(collection, id),
-                                            mimeType = cursor.getString(mimeColumn) ?: "application/octet-stream",
-                                            size = cursor.getLong(sizeColumn),
-                                            dateAdded = cursor.getLong(dateColumn)
-                            )
-                        )
+                            while (cursor.moveToNext()) {
+                                val name = cursor.getString(nameColumn) ?: continue
+                                val id = cursor.getLong(idColumn)
+
+                                if (!seenIds.add(id)) continue
+
+                                    files.add(
+                                        DownloadedMedia(
+                                            name = name,
+                                            uri = android.content.ContentUris.withAppendedId(collection, id),
+                                                        mimeType = cursor.getString(mimeColumn) ?: "application/octet-stream",
+                                                        size = cursor.getLong(sizeColumn),
+                                                        dateAdded = cursor.getLong(dateColumn)
+                                        )
+                                    )
+                            }
+                        }
+                    } catch (e: SecurityException) {
+                        // Media permission not granted (yet): skip this collection.
+                        // The permission launcher below calls refreshDownloads() again after the user answers.
+                        Log.w("MultiDL", "Scan blocked for $collection: ${e.message}")
                     }
                 }
 
-                downloadedFiles = files
+                downloadedFiles = files.sortedByDescending { it.dateAdded }
             }
 
             // Needed to see files saved by a previous install of the app (see Android scoped storage rules).
@@ -492,6 +515,11 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                                             "mp4", "m4v" -> "video/mp4"
                                             "mkv" -> "video/x-matroska"
                                             "webm" -> "video/webm"
+                                            "m4a" -> "audio/mp4"
+                                            "aac" -> "audio/aac"
+                                            "opus", "ogg" -> "audio/ogg"
+                                            "wav" -> "audio/wav"
+                                            "flac" -> "audio/flac"
                                             else -> "application/octet-stream"
                                         }
 
@@ -608,6 +636,8 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                                               onDeleteFile = { deleteDownloadedFile(it) },
                                               onRenameFile = { file, newName -> renameDownloadedFile(file, newName) },
                                               onViewAll = { screen = Screen.AllDownloads },
+                                              unfinishedDownloads = downloadQueue.count { it.isUnfinished() },
+                                              onOpenDownloads = { screen = Screen.ActiveDownloads },
                                               onOpenSettings = { screen = Screen.Settings },
                                               onDownload = { startDownload() }
                     )
@@ -618,6 +648,12 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                                                               onDeleteFile = { deleteDownloadedFile(it) },
                                                               onRenameFile = { file, newName -> renameDownloadedFile(file, newName) },
                                                               onBack = { screen = Screen.Home }
+                    )
+
+                    Screen.ActiveDownloads -> ActiveDownloadsScreen(
+                        downloads = downloadQueue,
+                        onBack = { screen = Screen.Home }
+                        // Pause / Resume later: pass itemActions = { item -> ... } here.
                     )
 
                     Screen.Settings -> SettingsScreen(
@@ -683,6 +719,8 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                                onDeleteFile: (DownloadedMedia) -> Unit,
                                onRenameFile: (DownloadedMedia, String) -> Unit,
                                onViewAll: () -> Unit,
+                               unfinishedDownloads: Int,
+                               onOpenDownloads: () -> Unit,
                                onOpenSettings: () -> Unit,
                                onDownload: () -> Unit
         ) {
@@ -718,6 +756,31 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                              color = colors.muted,
                              fontSize = 14.sp
                         )
+                    }
+
+                    // Downloads icon with a badge counting downloads that are still running or queued.
+                    IconButton(onClick = onOpenDownloads) {
+                        BadgedBox(
+                            badge = {
+                                if (unfinishedDownloads > 0) {
+                                    Badge(
+                                        containerColor = colors.accent,
+                                        contentColor = Color.White
+                                    ) {
+                                        Text(
+                                            if (unfinishedDownloads > 99) "99+" else unfinishedDownloads.toString()
+                                        )
+                                    }
+                                }
+                            }
+                        ) {
+                            Text(
+                                text = "↓",
+                                 fontSize = 28.sp,
+                                 fontWeight = FontWeight.Bold,
+                                 color = colors.text
+                            )
+                        }
                     }
 
                     IconButton(onClick = onOpenSettings) {
@@ -1204,6 +1267,135 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                             Text("›", color = colors.muted, fontSize = 22.sp)
                         }
                     }
+                }
+            }
+        }
+
+        /**
+         * Shows every download that is not finished yet: the one running now and the
+         * ones waiting in the queue. It only draws what it is given.
+         *
+         * Pause / Resume later: MultiDLScreen can pass [itemActions] to draw buttons on each
+         * row, and the row decides what to show from item.state (QUEUED, DOWNLOADING, PAUSED).
+         * Nothing else on this screen needs to change.
+         */
+        @Composable
+        private fun ActiveDownloadsScreen(
+            downloads: List<DownloadItem>,
+            onBack: () -> Unit,
+                                          itemActions: @Composable (DownloadItem) -> Unit = {}
+        ) {
+            val colors = LocalAppColors.current
+
+            // Running download first, then the queue in the order it was added.
+            val unfinished = downloads
+            .filter { it.isUnfinished() }
+            .sortedBy { if (it.state == DownloadState.QUEUED) 1 else 0 }
+
+            Column(
+                modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp)
+            ) {
+                ScreenHeader(
+                    title = "Downloads",
+                    subtitle = if (unfinished.size == 1) "1 unfinished download" else "${unfinished.size} unfinished downloads",
+                             onBack = onBack
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                if (unfinished.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No active downloads.\nRunning and queued downloads appear here.",
+                             color = colors.muted
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                               verticalArrangement = Arrangement.spacedBy(10.dp),
+                               contentPadding = PaddingValues(bottom = 16.dp)
+                    ) {
+                        items(unfinished, key = { it.id }) { item ->
+                            ActiveDownloadRow(
+                                item = item,
+                                containerColor = colors.panel.copy(alpha = 0.93f),
+                                              actions = { itemActions(item) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        /** One row of the Downloads screen. [actions] is an empty slot for the future Pause / Resume buttons. */
+        @Composable
+        private fun ActiveDownloadRow(
+            item: DownloadItem,
+            containerColor: Color,
+            actions: @Composable () -> Unit = {}
+        ) {
+            val colors = LocalAppColors.current
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = containerColor
+            ) {
+                Row(
+                    modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                           verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        // The real title is only known once a download finishes, so show the URL until then.
+                        Text(
+                            text = item.title.ifBlank { item.url },
+                             color = colors.text,
+                             fontWeight = FontWeight.Medium,
+                             maxLines = 2,
+                             overflow = TextOverflow.Ellipsis
+                        )
+
+                        if (item.state == DownloadState.QUEUED) {
+                            Text(
+                                text = "Waiting in queue · ${item.format}",
+                                 color = colors.muted,
+                                 fontSize = 12.sp
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { item.progress / 100f },
+                                modifier = Modifier
+                                .fillMaxWidth()
+                                .height(5.dp)
+                                .clip(RoundedCornerShape(50)),
+                                                    color = colors.accent,
+                                                    trackColor = colors.background.copy(alpha = 0.45f)
+                            )
+                            Text(
+                                text = "${item.status} · ${item.progress}% · ${item.format}",
+                                 color = colors.muted,
+                                 fontSize = 12.sp
+                            )
+                        }
+                    }
+
+                    actions()
                 }
             }
         }
