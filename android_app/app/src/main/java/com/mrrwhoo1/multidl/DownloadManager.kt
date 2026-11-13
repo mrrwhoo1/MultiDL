@@ -100,13 +100,11 @@ class MultiDLDownloadManager(
         onStartDownload(
             nextDownload,
 
-            // Progress callback
-            onProgress = { percent, status ->
+            { percent, status ->
                 updateProgress(nextDownload.id, percent, status)
             },
 
-            // Completion callback
-            onComplete = { success, title, error ->
+            { success, title, error ->
                 completeDownload(
                     id = nextDownload.id,
                     success = success,
