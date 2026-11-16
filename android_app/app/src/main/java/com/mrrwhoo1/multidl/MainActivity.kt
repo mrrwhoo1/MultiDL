@@ -1097,6 +1097,14 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                                        onBack: () -> Unit
         ) {
             val colors = LocalAppColors.current
+            var selectedFilter by remember { mutableStateOf("All") }
+
+            // Audio files are identified by their MIME type; everything else is treated as video.
+            val filteredFiles = when (selectedFilter) {
+                "Video" -> files.filter { it.mimeType.startsWith("video/", ignoreCase = true) }
+                "Audio" -> files.filter { it.mimeType.startsWith("audio/", ignoreCase = true) }
+                else -> files
+            }
 
             Column(
                 modifier = Modifier
@@ -1113,7 +1121,28 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                if (files.isEmpty()) {
+                // These filters only change which completed files are displayed.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("All", "Video", "Audio").forEach { filter ->
+                        FilterChip(
+                            selected = selectedFilter == filter,
+                            onClick = { selectedFilter = filter },
+                            label = { Text(filter) },
+                                   colors = FilterChipDefaults.filterChipColors(
+                                       selectedContainerColor = colors.accent.copy(alpha = 0.22f),
+                                                                                selectedLabelColor = colors.text,
+                                                                                labelColor = colors.muted
+                                   )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (filteredFiles.isEmpty()) {
                     Box(
                         modifier = Modifier
                         .weight(1f)
@@ -1121,7 +1150,12 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "No downloads yet.\nDownloaded files will appear here.",
+                            text = when {
+                                files.isEmpty() -> "No downloads yet.\nDownloaded files will appear here."
+                                selectedFilter == "Video" -> "No video downloads yet."
+                                selectedFilter == "Audio" -> "No audio downloads yet."
+                                else -> "No downloads to show."
+                            },
                              color = colors.muted
                         )
                     }
@@ -1131,7 +1165,7 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                                verticalArrangement = Arrangement.spacedBy(10.dp),
                                contentPadding = PaddingValues(bottom = 16.dp)
                     ) {
-                        items(files, key = { it.uri.toString() }) { file ->
+                        items(filteredFiles, key = { it.uri.toString() }) { file ->
                             // Sits straight on the background, so it uses the panel colour.
                             FileRow(
                                 file = file,
