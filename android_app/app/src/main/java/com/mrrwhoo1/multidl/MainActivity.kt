@@ -41,6 +41,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
@@ -774,11 +775,10 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                                 }
                             }
                         ) {
-                            Text(
-                                text = "↓",
-                                 fontSize = 28.sp,
-                                 fontWeight = FontWeight.Bold,
-                                 color = colors.text
+                            Icon(
+                                imageVector = Icons.Filled.Download,
+                                 contentDescription = "Downloads",
+                                 tint = colors.text
                             )
                         }
                     }
@@ -1286,11 +1286,19 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                                           itemActions: @Composable (DownloadItem) -> Unit = {}
         ) {
             val colors = LocalAppColors.current
+            var selectedFilter by remember { mutableStateOf("All") }
 
             // Running download first, then the queue in the order it was added.
             val unfinished = downloads
             .filter { it.isUnfinished() }
             .sortedBy { if (it.state == DownloadState.QUEUED) 1 else 0 }
+
+            // Audio downloads use the Audio format. HD and Data Saver are video downloads.
+            val filteredDownloads = when (selectedFilter) {
+                "Video" -> unfinished.filter { !it.format.equals("Audio", ignoreCase = true) }
+                "Audio" -> unfinished.filter { it.format.equals("Audio", ignoreCase = true) }
+                else -> unfinished
+            }
 
             Column(
                 modifier = Modifier
@@ -1307,7 +1315,28 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                if (unfinished.isEmpty()) {
+                // Filter the list without changing or removing anything from the queue.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("All", "Video", "Audio").forEach { filter ->
+                        FilterChip(
+                            selected = selectedFilter == filter,
+                            onClick = { selectedFilter = filter },
+                            label = { Text(filter) },
+                                   colors = FilterChipDefaults.filterChipColors(
+                                       selectedContainerColor = colors.accent.copy(alpha = 0.22f),
+                                                                                selectedLabelColor = colors.text,
+                                                                                labelColor = colors.muted
+                                   )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (filteredDownloads.isEmpty()) {
                     Box(
                         modifier = Modifier
                         .weight(1f)
@@ -1315,7 +1344,12 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "No active downloads.\nRunning and queued downloads appear here.",
+                            text = when {
+                                unfinished.isEmpty() -> "No active downloads.\nRunning and queued downloads appear here."
+                                selectedFilter == "Video" -> "No active video downloads."
+                                selectedFilter == "Audio" -> "No active audio downloads."
+                                else -> "No downloads to show."
+                            },
                              color = colors.muted
                         )
                     }
@@ -1325,7 +1359,7 @@ private const val GITHUB_PROFILE_URL = "https://github.com/mrrwhoo1"
                                verticalArrangement = Arrangement.spacedBy(10.dp),
                                contentPadding = PaddingValues(bottom = 16.dp)
                     ) {
-                        items(unfinished, key = { it.id }) { item ->
+                        items(filteredDownloads, key = { it.id }) { item ->
                             ActiveDownloadRow(
                                 item = item,
                                 containerColor = colors.panel.copy(alpha = 0.93f),
