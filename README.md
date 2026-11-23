@@ -49,8 +49,8 @@ The project started as a Python desktop app and is now growing into a family of 
 | Version | Technology | Status |
 |---|---|---|
 | **Android app** | Kotlin, Jetpack Compose, embedded Python (yt-dlp) | Available, see [Download](#download) |
-| **Linux**  | Flutter | In development |
-| **Windows exe** | Flutter | In development |
+| **Linux**  | Python Flet | In development |
+| **Windows exe** | Python Flet | In development |
 
 
 ## Screenshots
