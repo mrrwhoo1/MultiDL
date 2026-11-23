@@ -107,15 +107,15 @@ internal fun MultiDLScreen(
 
                         if (!seenIds.add(id)) continue
 
-                        files.add(
-                            DownloadedMedia(
-                                name = name,
-                                uri = android.content.ContentUris.withAppendedId(collection, id),
-                                mimeType = cursor.getString(mimeColumn) ?: "application/octet-stream",
-                                size = cursor.getLong(sizeColumn),
-                                dateAdded = cursor.getLong(dateColumn)
+                            files.add(
+                                DownloadedMedia(
+                                    name = name,
+                                    uri = android.content.ContentUris.withAppendedId(collection, id),
+                                                mimeType = cursor.getString(mimeColumn) ?: "application/octet-stream",
+                                                size = cursor.getLong(sizeColumn),
+                                                dateAdded = cursor.getLong(dateColumn)
+                                )
                             )
-                        )
                     }
                 }
             } catch (e: SecurityException) {
@@ -236,7 +236,7 @@ internal fun MultiDLScreen(
                     }
                 }
             },
-            onStartDownload = { item, onProgress, onComplete ->
+            onStartDownload = { item, onProgress, onComplete, onStopped ->
                 downloadExecutor.execute {
                     try {
                         val python = Python.getInstance()
@@ -256,8 +256,16 @@ internal fun MultiDLScreen(
                                     onProgress(percent, status)
                                 }
                             },
-                            downloadDir.absolutePath
+                            downloadDir.absolutePath,
+                            item.id
                         )
+
+                        // Python reports "pause" or "cancel" here when the user stopped it.
+                        val stopped = result.callAttr("get", "stopped", "")?.toString() ?: ""
+                        if (stopped.isNotEmpty()) {
+                            onStopped(stopped)
+                            return@execute
+                        }
 
                         val success = result.callAttr("get", "success").toBoolean()
                         val title = result.callAttr("get", "title").toString()
@@ -343,6 +351,31 @@ internal fun MultiDLScreen(
                         onComplete(false, "", error)
                     }
                 }
+            },
+
+            // The download executor is busy downloading, so stop requests
+            // are sent to Python from their own short-lived thread.
+            onStopRequest = { id, reason ->
+                Thread {
+                    try {
+                        Python.getInstance()
+                        .getModule("android_download_handler")
+                        .callAttr("request_stop", id, reason)
+                    } catch (e: Exception) {
+                        Log.w("MultiDL", "Could not send stop request: ${e.message}")
+                    }
+                }.start()
+            },
+            onDiscardPartial = { id ->
+                Thread {
+                    try {
+                        Python.getInstance()
+                        .getModule("android_download_handler")
+                        .callAttr("discard_partial", id)
+                    } catch (e: Exception) {
+                        Log.w("MultiDL", "Could not discard partial files: ${e.message}")
+                    }
+                }.start()
             }
         )
     }
@@ -413,8 +446,10 @@ internal fun MultiDLScreen(
 
             Screen.ActiveDownloads -> ActiveDownloadsScreen(
                 downloads = downloadQueue,
-                onBack = { screen = Screen.Home }
-                // Pause / Resume later: pass itemActions = { item -> ... } here.
+                onBack = { screen = Screen.Home },
+                onPause = { downloadManager.pause(it.id) },
+                                                            onResume = { downloadManager.resume(it.id) },
+                                                            onCancel = { downloadManager.cancel(it.id) }
             )
 
             Screen.Settings -> SettingsScreen(
