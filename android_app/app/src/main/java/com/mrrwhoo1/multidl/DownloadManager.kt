@@ -10,7 +10,7 @@ enum class DownloadState {
     DOWNLOADING,
     COMPLETED,
     FAILED,
-    // Not used yet: reserved for the upcoming Pause / Resume feature.
+    // Stopped by the user. The partial file is kept so Resume can continue it.
     PAUSED
 }
 
@@ -25,7 +25,10 @@ data class DownloadItem(
                         var progress: Int = 0,
                         var status: String = "Queued",
                         var state: DownloadState = DownloadState.QUEUED,
-                        var error: String? = null
+                        var error: String? = null,
+                        // True between pressing Pause/Cancel and Python actually stopping.
+                        // The screen uses it to disable the buttons so they can't be pressed twice.
+                        var stopping: Boolean = false
 )
 
 /**
@@ -41,15 +44,26 @@ state == DownloadState.PAUSED
  * Manages the MultiDL download queue.
  *
  * Only one download runs at a time for now. When a download finishes,
- * the next queued download starts automatically.
+ * is paused or is cancelled, the next queued download starts automatically.
+ *
+ * Pause / Resume / Cancel work like this:
+ *  - Pause: ask Python to stop. Python keeps the partial file. State becomes PAUSED.
+ *  - Resume: put the item back in the queue. When its turn comes it is started again
+ *    and yt-dlp continues from the partial file.
+ *  - Cancel: ask Python to stop and delete the partial file, then remove the item.
  */
 class MultiDLDownloadManager(
     private val onQueueChanged: (List<DownloadItem>) -> Unit,
         private val onStartDownload: (
             item: DownloadItem,
             onProgress: (Int, String) -> Unit,
-                                      onComplete: (success: Boolean, title: String, error: String?) -> Unit
-        ) -> Unit
+                                      onComplete: (success: Boolean, title: String, error: String?) -> Unit,
+                                      onStopped: (reason: String) -> Unit
+        ) -> Unit,
+        // Tells the Python downloader to stop a RUNNING download. reason = "pause" or "cancel".
+        private val onStopRequest: (id: String, reason: String) -> Unit,
+            // Deletes the partial files of a download that is paused (so nothing is running).
+            private val onDiscardPartial: (id: String) -> Unit
 ) {
 
     private val downloads = mutableListOf<DownloadItem>()
@@ -73,11 +87,90 @@ class MultiDLDownloadManager(
         }
 
         /**
+         * Pauses a download.
+         * A queued download is simply marked paused. A running one is asked to stop.
+         */
+        @Synchronized
+        fun pause(id: String) {
+            val item = downloads.find { it.id == id } ?: return
+
+            when (item.state) {
+                DownloadState.QUEUED -> {
+                    item.state = DownloadState.PAUSED
+                    item.status = "Paused"
+                    notifyQueueChanged()
+                }
+
+                DownloadState.DOWNLOADING -> {
+                    if (item.stopping) return
+                        item.stopping = true
+                        item.status = "Pausing…"
+                        notifyQueueChanged()
+                        onStopRequest(id, "pause")
+                }
+
+                else -> {
+                    // Completed, failed or already paused: nothing to do.
+                }
+            }
+        }
+
+        /**
+         * Puts a paused download back in the queue.
+         */
+        @Synchronized
+        fun resume(id: String) {
+            val item = downloads.find { it.id == id } ?: return
+
+            if (item.state != DownloadState.PAUSED) return
+
+                item.state = DownloadState.QUEUED
+                item.status = "Queued"
+                notifyQueueChanged()
+
+                startNextDownload()
+        }
+
+        /**
+         * Cancels a download and removes it from the queue.
+         */
+        @Synchronized
+        fun cancel(id: String) {
+            val item = downloads.find { it.id == id } ?: return
+
+            when (item.state) {
+                DownloadState.QUEUED -> {
+                    downloads.remove(item)
+                    notifyQueueChanged()
+                }
+
+                DownloadState.PAUSED -> {
+                    // Nothing is running, but its partial file is still on disk.
+                    downloads.remove(item)
+                    notifyQueueChanged()
+                    onDiscardPartial(id)
+                }
+
+                DownloadState.DOWNLOADING -> {
+                    if (item.stopping) return
+                        item.stopping = true
+                        item.status = "Cancelling…"
+                        notifyQueueChanged()
+                        onStopRequest(id, "cancel")
+                }
+
+                else -> {
+                    // Completed or failed: nothing to cancel.
+                }
+            }
+        }
+
+        /**
          * Returns a copy of all downloads.
          */
         @Synchronized
         fun getDownloads(): List<DownloadItem> {
-            return downloads.toList()
+            return downloads.map { it.copy() }
         }
 
         /**
@@ -104,7 +197,8 @@ class MultiDLDownloadManager(
             currentDownload = nextDownload
             nextDownload.state = DownloadState.DOWNLOADING
             nextDownload.status = "Preparing download…"
-            nextDownload.progress = 0
+            nextDownload.stopping = false
+            // Progress is not reset here, so a resumed download keeps its bar position.
 
             notifyQueueChanged()
 
@@ -122,6 +216,10 @@ class MultiDLDownloadManager(
                         title = title,
                         error = error
                     )
+                },
+
+                { reason ->
+                    stopDownload(nextDownload.id, reason)
                 }
             )
         }
@@ -138,7 +236,11 @@ class MultiDLDownloadManager(
             val item = downloads.find { it.id == id } ?: return
 
             item.progress = percent.coerceIn(0, 100)
-            item.status = status
+
+            // While a stop is in progress, keep showing "Pausing…" / "Cancelling…".
+            if (!item.stopping) {
+                item.status = status
+            }
 
             notifyQueueChanged()
         }
@@ -155,6 +257,8 @@ class MultiDLDownloadManager(
             error: String?
         ) {
             val item = downloads.find { it.id == id } ?: return
+
+            item.stopping = false
 
             if (title.isNotBlank()) {
                 item.title = title
@@ -180,9 +284,39 @@ class MultiDLDownloadManager(
         }
 
         /**
-         * Sends a copy of the current queue to the UI.
+         * Called when Python confirms that a running download was stopped.
+         * "pause" keeps the item (as PAUSED), "cancel" removes it.
+         * Either way the next queued download can start.
+         */
+        @Synchronized
+        private fun stopDownload(id: String, reason: String) {
+            val item = downloads.find { it.id == id }
+
+            if (item != null) {
+                item.stopping = false
+
+                if (reason == "cancel") {
+                    downloads.remove(item)
+                } else {
+                    item.state = DownloadState.PAUSED
+                    item.status = "Paused"
+                }
+            }
+
+            if (currentDownload?.id == id) {
+                currentDownload = null
+            }
+
+            notifyQueueChanged()
+
+            startNextDownload()
+        }
+
+        /**
+         * Sends a snapshot of the current queue to the UI.
+         * The items are copied so Compose sees a real change whenever one of them changes.
          */
         private fun notifyQueueChanged() {
-            onQueueChanged(downloads.toList())
+            onQueueChanged(downloads.map { it.copy() })
         }
 }
