@@ -11,16 +11,46 @@ Date [22nd-Oct-2026]
 
 """
 
-
 import os
-import glob  #Used to find patterns in file names like *.mp3..
+import glob  # Used to find patterns in file names like *.mp3..
 import yt_dlp
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 from yt_dlp import version as ytdlp_version
 from yt_dlp.utils import sanitize_filename
 
 
-#Seems like during clean url it was messing with the facebook links horribly, made this to leep certain characters i saw appear alot in links.
+# ---- Pause / Cancel support -------------------------------------------------
+# Kotlin writes "pause" or "cancel" into _stop_requests for a download id.
+# yt-dlp calls our progress hook many times a second, and the hook checks this
+# dictionary. If it finds a request it raises DownloadStopped, which interrupts
+# the download. A paused download keeps its .part file so it can continue later.
+_stop_requests = {}
+_partial_files = {}  # download id -> the .part files yt-dlp is writing for it
+
+
+class DownloadStopped(Exception):
+    """Raised on purpose to interrupt yt-dlp when the user pauses or cancels."""
+
+
+def request_stop(download_id, reason):
+    """Called from Kotlin. reason is "pause" or "cancel"."""
+    _stop_requests[download_id] = reason
+
+
+def _delete_partial_files(download_id):
+    for path in _partial_files.pop(download_id, set()):
+        for leftover in (path, path + ".ytdl"):
+            if os.path.isfile(leftover):
+                os.remove(leftover)
+
+
+def discard_partial(download_id):
+    """Called from Kotlin when a PAUSED download is cancelled (nothing is running)."""
+    _stop_requests.pop(download_id, None)
+    _delete_partial_files(download_id)
+
+
+# Seems like during clean url it was messing with the facebook links horribly, made this to leep certain characters i saw appear alot in links.
 _QUERY_KEEP = {
     "facebook.com": {"v", "story_fbid", "id", "fbid"},
     "youtube.com": {"v"},
@@ -28,36 +58,43 @@ _QUERY_KEEP = {
 
 
 def clean_url(url):
-    parsed = urlparse(url.strip()) #just removes the white spaces you might pick up in links.
-    host = (parsed.hostname or "").lower() #gets the websites host name like youtube.com
+    parsed = urlparse(
+        url.strip()
+    )  # just removes the white spaces you might pick up in links.
+    host = (
+        parsed.hostname or ""
+    ).lower()  # gets the websites host name like youtube.com
 
     keep = set()
     for domain, keys in _QUERY_KEEP.items():
-        if host == domain or host.endswith("." + domain): #self explainatory really.
-            #e.g if after host we get wwww.facebook.com then run the if block, domain[0] is just facebook.com so the first styatement is false
-            #but then we go to the or statemtn which says if www.facebook.com (host) == .+DOMAIN which is .facebook.com that passes as true cause it wont care about the www.
+        if host == domain or host.endswith("." + domain):  # self explainatory really.
+            # e.g if after host we get wwww.facebook.com then run the if block, domain[0] is just facebook.com so the first styatement is false
+            # but then we go to the or statemtn which says if www.facebook.com (host) == .+DOMAIN which is .facebook.com that passes as true cause it wont care about the www.
 
-            keep = keys #if it washost was facebook then keep = {"v", "story_fbid", "id", "fbid"}.
+            keep = keys  # if it washost was facebook then keep = {"v", "story_fbid", "id", "fbid"}.
             break
 
     filtered_params = []
 
-    for k, v in parse_qsl(parsed.query): #parse_qsl = Take a URL query string and turn it into a list of key-value pairs.
-        #[
+    for k, v in parse_qsl(
+        parsed.query
+    ):  # parse_qsl = Take a URL query string and turn it into a list of key-value pairs.
+        # [
         #     ("v", "abc123"),
         #     ("t", "30")
         # ]
-        #and for the parsed.query urlparse(url) gives a parse result conatining multiple stuff like scheme, path, params, query etc so saying
+        # and for the parsed.query urlparse(url) gives a parse result conatining multiple stuff like scheme, path, params, query etc so saying
         # parsed.query just says give me the v=abc123&t=30 part of the url as query holds that part of the link. so {v : abc123...}
-        if k in keep: #checks if that key 'v' is in keep and if it it then it is added to the filtered_params list.
+        if (
+            k in keep
+        ):  # checks if that key 'v' is in keep and if it it then it is added to the filtered_params list.
             filtered_params.append((k, v))
 
-    query = urlencode(filtered_params) #opposite of parse_qsl, it gets the ("v", "abc123") and makes it back to v=abc123
+    query = urlencode(
+        filtered_params
+    )  # opposite of parse_qsl, it gets the ("v", "abc123") and makes it back to v=abc123
 
-
-
-
-    #Just incase who ever reads this one day forgets that earlier urlparse(url) has slotes like
+    # Just incase who ever reads this one day forgets that earlier urlparse(url) has slotes like
     """
     (
     "https",            # scheme
@@ -70,8 +107,10 @@ def clean_url(url):
     """
     return urlunparse(
         (parsed.scheme, parsed.netloc, parsed.path, "", query, "")
-    ) #this gives back the full cleaned link.
-#if still lost loook at this https://www.youtube.com/watch?v=abc123&t=420&utm_source=google, everything before the & uniqly identifies a youtube video, keeping the whole thing would cause issues sometimes BUt from my testing youtube is a lot more forgiving, this function was primary used for FACEBOOK as this one is a completely different story ( i know the keep dictionary only has facebook and youtube for now, might expand it later if i notice more issues on the otehr sites...especially data saver as its caused me the most issues.)
+    )  # this gives back the full cleaned link.
+
+
+# if still lost loook at this https://www.youtube.com/watch?v=abc123&t=420&utm_source=google, everything before the & uniqly identifies a youtube video, keeping the whole thing would cause issues sometimes BUt from my testing youtube is a lot more forgiving, this function was primary used for FACEBOOK as this one is a completely different story ( i know the keep dictionary only has facebook and youtube for now, might expand it later if i notice more issues on the otehr sites...especially data saver as its caused me the most issues.)
 
 
 def safe_filename(title, fallback):
@@ -79,7 +118,6 @@ def safe_filename(title, fallback):
     name = sanitize_filename(title or "", restricted=False)
     name = name.strip(" .")[:120].rstrip(" .")
     return name or fallback
-
 
 
 class _CollectLogger:
@@ -101,8 +139,13 @@ class _CollectLogger:
         pass
 
 
-def download(f, url, progress_hook=None, output_path=None):
+def download(f, url, progress_hook=None, output_path=None, download_id=""):
     logger = _CollectLogger()
+
+    # A fresh start or a resume: forget any old stop request.
+    # setdefault (not "= set()") so a resume keeps the .part files it already knows about.
+    _stop_requests.pop(download_id, None)
+    _partial_files.setdefault(download_id, set())
 
     try:
         if not output_path:
@@ -116,8 +159,7 @@ def download(f, url, progress_hook=None, output_path=None):
             "quiet": True,
             "no_warnings": True,
             "overwrites": True,
-            "logger": logger, #This is where the above class is used to provide warnings.
-
+            "logger": logger,  # This is where the above class is used to provide warnings.
             # Social sites drop connections now and then; retry instead of failing.
             "retries": 5,
             "fragment_retries": 5,
@@ -139,33 +181,43 @@ def download(f, url, progress_hook=None, output_path=None):
                     # A UI callback failure must not cancel the download.
                     pass
 
+        def check_stop():
+            if _stop_requests.get(download_id):
+                raise DownloadStopped()
+
         def download_stream(
             format_selector, suffix, start_percent, end_percent, label, sort=None
         ):
+            # Also check between the video and audio streams, not only inside the hook.
+            check_stop()
+
             options = common_options.copy()
             options["format"] = format_selector
             if sort:
                 options["format_sort"] = sort
-            options["outtmpl"] = os.path.join(
-                output_path, f"%(id)s_{suffix}.%(ext)s"
-            )
+            options["outtmpl"] = os.path.join(output_path, f"%(id)s_{suffix}.%(ext)s")
 
             def on_yt_dlp_progress(data):
+                # Remember the .part file so Cancel can delete it later.
+                if data.get("tmpfilename"):
+                    _partial_files[download_id].add(data["tmpfilename"])
+
+                # Pause / Cancel: stop yt-dlp right here.
+                check_stop()
+
                 status = data.get("status")
 
                 if status == "downloading":
                     downloaded = data.get("downloaded_bytes") or 0
                     total = (
-                        data.get("total_bytes")
-                        or data.get("total_bytes_estimate")
-                        or 0
+                        data.get("total_bytes") or data.get("total_bytes_estimate") or 0
                     )
 
                     if total > 0:
                         fraction = min(1.0, downloaded / total)
-                        percent = start_percent + (
-                            end_percent - start_percent
-                        ) * fraction
+                        percent = (
+                            start_percent + (end_percent - start_percent) * fraction
+                        )
                         report(percent, label)
                     else:
                         report(start_percent, f"{label}…")
@@ -182,13 +234,9 @@ def download(f, url, progress_hook=None, output_path=None):
                 fmt = downloads[0] if downloads else {}
 
                 paths = [
-                    item.get("filepath") or item.get("filename")
-                    for item in downloads
+                    item.get("filepath") or item.get("filename") for item in downloads
                 ]
-                paths = [
-                    path for path in paths
-                    if path and os.path.isfile(path)
-                ]
+                paths = [path for path in paths if path and os.path.isfile(path)]
 
                 if paths:
                     return paths[0], info, fmt
@@ -197,21 +245,17 @@ def download(f, url, progress_hook=None, output_path=None):
                 if os.path.isfile(expected):
                     return expected, info, fmt
 
-                pattern = os.path.join(
-                    output_path, f"{info['id']}_{suffix}.*"
-                )
+                pattern = os.path.join(output_path, f"{info['id']}_{suffix}.*")
                 matches = [
-                    path for path in glob.glob(pattern)
-                    if os.path.isfile(path)
-                    and not path.endswith((".part", ".ytdl"))
+                    path
+                    for path in glob.glob(pattern)
+                    if os.path.isfile(path) and not path.endswith((".part", ".ytdl"))
                 ]
 
                 if matches:
                     return max(matches, key=os.path.getmtime), info, fmt
 
-                raise FileNotFoundError(
-                    f"Downloaded {suffix} stream was not found."
-                )
+                raise FileNotFoundError(f"Downloaded {suffix} stream was not found.")
 
         # Audio mode: preserve the working MP3 conversion.
         if f == "Audio":
@@ -225,8 +269,7 @@ def download(f, url, progress_hook=None, output_path=None):
 
             mp3_path = os.path.splitext(audio_path)[0] + ".mp3"
             command = (
-                f'-y -i "{audio_path}" -vn '
-                f'-codec:a libmp3lame -b:a 192k "{mp3_path}"'
+                f'-y -i "{audio_path}" -vn -codec:a libmp3lame -b:a 192k "{mp3_path}"'
             )
 
             result = str(FfmpegBridge.execute(command))
@@ -236,9 +279,7 @@ def download(f, url, progress_hook=None, output_path=None):
                 or not os.path.isfile(mp3_path)
                 or os.path.getsize(mp3_path) == 0
             ):
-                raise RuntimeError(
-                    f"MP3 conversion failed: {result[-700:]}"
-                )
+                raise RuntimeError(f"MP3 conversion failed: {result[-700:]}")
 
             if os.path.abspath(audio_path) != os.path.abspath(mp3_path):
                 os.remove(audio_path)
@@ -283,19 +324,18 @@ def download(f, url, progress_hook=None, output_path=None):
 
         title_name = safe_filename(info.get("title"), info.get("id", "video"))
 
-
         """
         TO BE HONEST I MYSELF CAN BARELY UNDERSTAND MOST OF THE CODE BELOW, AUDIO HAS NEVER BEEN MY STRONG SUIT. TRIED TO EXPLAIN AS BEST AS I COULD.
         """
-
 
         # If the "video" file already contains sound, there is nothing to merge.
         # Only skip when yt-dlp reports REAL codecs for both streams; if the
         # codecs are unknown we merge as before so we never save a silent video.
         vcodec = video_fmt.get("vcodec")
         acodec = video_fmt.get("acodec")
-        already_has_audio = (
-            vcodec not in (None, "none") and acodec not in (None, "none")
+        already_has_audio = vcodec not in (None, "none") and acodec not in (
+            None,
+            "none",
         )
 
         if already_has_audio:
@@ -329,7 +369,7 @@ def download(f, url, progress_hook=None, output_path=None):
 
         command = (
             f'-y -i "{video_path}" -i "{audio_path}" '
-            f'-map 0:v:0 -map 1:a:0 '
+            f"-map 0:v:0 -map 1:a:0 "
             f'-c copy "{merged_path}"'
         )
 
@@ -340,9 +380,7 @@ def download(f, url, progress_hook=None, output_path=None):
             or not os.path.isfile(merged_path)
             or os.path.getsize(merged_path) == 0
         ):
-            raise RuntimeError(
-                f"Video/audio merge failed: {result[-700:]}"
-            )
+            raise RuntimeError(f"Video/audio merge failed: {result[-700:]}")
 
         # Delete the separate streams only after a successful merge, did this obviosuly to save storage.
         for path in (video_path, audio_path):
@@ -364,6 +402,19 @@ def download(f, url, progress_hook=None, output_path=None):
         }
 
     except Exception as e:
+        # Was this a deliberate Pause / Cancel? Check the flag instead of the exception
+        # type, because yt-dlp sometimes re-wraps errors raised inside hooks.
+        stop_reason = _stop_requests.pop(download_id, None)
+        if stop_reason:
+            if stop_reason == "cancel":
+                _delete_partial_files(download_id)
+            return {
+                "success": False,
+                "stopped": stop_reason,
+                "title": "",
+                "file_path": "",
+            }
+
         # Put the real reason on screen: error text, any yt-dlp warnings
         # (e.g. "login required"), and which yt-dlp version is running.
         message = str(e).strip() or e.__class__.__name__
