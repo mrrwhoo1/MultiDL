@@ -21,6 +21,7 @@ internal fun SettingsScreen(
     onDarkChange: (Boolean) -> Unit,
                            onOpenAbout: () -> Unit,
                            onOpenLicences: () -> Unit,
+                           onSendFeedback: () -> Unit,
                            onBack: () -> Unit
 ) {
     val colors = LocalAppColors.current
@@ -128,6 +129,40 @@ internal fun SettingsScreen(
                         )
                         Text(
                             text = "View MultiDL's licence",
+                             color = colors.muted,
+                             fontSize = 13.sp
+                        )
+                    }
+
+                    Text("›", color = colors.muted, fontSize = 22.sp)
+                }
+
+                // Divider between Licences and Feedback.
+                Box(
+                    modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .height(1.dp)
+                    .background(colors.border.copy(alpha = 0.4f))
+                )
+
+                // Feedback row: opens the person's email app, addressed to the developer.
+                Row(
+                    modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSendFeedback() }
+                    .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Send feedback",
+                             color = colors.text,
+                             fontWeight = FontWeight.SemiBold,
+                             fontSize = 16.sp
+                        )
+                        Text(
+                            text = "Opens your email app to message the developer",
                              color = colors.muted,
                              fontSize = 13.sp
                         )
