@@ -1,17 +1,11 @@
 """
-Date [22nd-Oct-2026]
-- Updated the code to better handle facebook specifically as the previous code constatnly failed and data saver completely did not work.
-- Also attempted to fix youtube falling back to foreign languages when i select data saver.
-- I tried to explain most of the code line by line incase someone ever stables upon it and doesnt want to just copy and paste random jargon.
-- Also just noticed the typing errors, My bad. i believe you can still understand what i mean.
-
-
-- For those wondering how all this data is sent to kotlin, its cause of chaquopy which is acting as a bridge. this functions are all being called from
-/home/mrrwhoo/projects/MultiDL/android_app/app/src/main/java/com/mrrwhoo1/multidl/MainActivity.kt
+Date [24th-Nov-2026]
+-Adding playlist support now.
 
 """
 
 import os
+import json
 import glob  # Used to find patterns in file names like *.mp3..
 import yt_dlp
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
@@ -427,3 +421,100 @@ def download(f, url, progress_hook=None, output_path=None, download_id=""):
             "title": f"{message[:500]} (yt-dlp {ytdlp_version.__version__})",
             "file_path": "",
         }
+
+
+# ---- Playlist support -------------------------------------------------------
+# Kotlin calls list_playlist() with the link exactly as it was pasted. It must NOT go
+# through clean_url(), which would throw away the list= part. Nothing is downloaded
+# here: this only reads the playlist's contents. Kotlin then queues every entry as a
+# normal single-video download, so the rest of this file works exactly as before.
+
+MAX_PLAYLIST_ITEMS = 200
+
+
+def _playlist_url(url):
+    """Turns watch?v=abc&list=xyz into https://www.youtube.com/playlist?list=xyz."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+
+    is_youtube = (
+        host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+    )
+    if is_youtube:
+        list_id = dict(parse_qsl(parsed.query)).get("list")
+        if list_id:
+            return "https://www.youtube.com/playlist?" + urlencode({"list": list_id})
+
+    return url
+
+
+def list_playlist(url):
+    """
+    Returns a JSON string (easy for Kotlin to read):
+    {"success": true, "title": "...", "truncated": false,
+     "entries": [{"title": "...", "url": "https://..."}, ...]}
+    or {"success": false, "error": "..."} when something went wrong.
+    """
+    logger = _CollectLogger()
+
+    try:
+        options = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            # "in_playlist" = only read the list of videos, do not open every video page.
+            "extract_flat": "in_playlist",
+            "noplaylist": False,
+            "playlistend": MAX_PLAYLIST_ITEMS
+            + 1,  # +1 so we can tell if there were more
+            "retries": 3,
+            "extractor_retries": 3,
+            "socket_timeout": 30,
+            "logger": logger,
+        }
+
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(_playlist_url(url.strip()), download=False)
+
+        entries = []
+        for entry in list(info.get("entries") or []):
+            if not entry:
+                continue
+
+            title = (entry.get("title") or "").strip()
+
+            # Videos that were removed or made private cannot be downloaded.
+            if title in ("[Private video]", "[Deleted video]"):
+                continue
+
+            link = entry.get("url") or entry.get("webpage_url") or ""
+            if not link.startswith("http") and entry.get("id"):
+                link = f"https://www.youtube.com/watch?v={entry['id']}"
+            if not link.startswith("http"):
+                continue
+
+            entries.append({"title": title, "url": link})
+
+        truncated = len(entries) > MAX_PLAYLIST_ITEMS
+
+        return json.dumps(
+            {
+                "success": True,
+                "title": info.get("title") or "",
+                "truncated": truncated,
+                "entries": entries[:MAX_PLAYLIST_ITEMS],
+            }
+        )
+
+    except Exception as e:
+        message = str(e).strip() or e.__class__.__name__
+        notes = " | ".join(logger.warnings[-3:])
+        if notes:
+            message = f"{message} [{notes}]"
+
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"{message[:500]} (yt-dlp {ytdlp_version.__version__})",
+            }
+        )
