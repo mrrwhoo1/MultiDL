@@ -87,6 +87,29 @@ class MultiDLDownloadManager(
         }
 
         /**
+         * Adds many downloads at once, for example every video in a playlist.
+         * Each pair is (url, title). They are all added first and the queue is announced
+         * once, instead of once per video. The first one starts right away, the others
+         * wait their turn, so the playlist downloads one video at a time.
+         */
+        @Synchronized
+        fun addDownloads(videos: List<Pair<String, String>>, format: String) {
+            videos.forEach { (videoUrl, videoTitle) ->
+                downloads.add(
+                    DownloadItem(
+                        url = videoUrl,
+                        format = format,
+                            title = videoTitle
+                    )
+                )
+            }
+
+            notifyQueueChanged()
+
+            startNextDownload()
+        }
+
+        /**
          * Pauses a download.
          * A queued download is simply marked paused. A running one is asked to stop.
          */
@@ -260,11 +283,13 @@ class MultiDLDownloadManager(
 
             item.stopping = false
 
-            if (title.isNotBlank()) {
-                item.title = title
-            }
-
             if (success) {
+                // Only a finished download gives us a real title. On failure "title" holds
+                // the error text, and we do not want it to replace the video's name.
+                if (title.isNotBlank()) {
+                    item.title = title
+                }
+
                 item.state = DownloadState.COMPLETED
                 item.progress = 100
                 item.status = "Completed"

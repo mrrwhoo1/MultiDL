@@ -2,9 +2,13 @@ package com.mrrwhoo1.multidl
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -14,12 +18,16 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
 import java.io.File
+import org.json.JSONObject
 import java.util.concurrent.Executors
 
 // App state, download logic and screen switching. The screens it shows live in their own files.
@@ -37,6 +45,10 @@ internal fun MultiDLScreen(
     var selectedFormat by remember { mutableStateOf("HD") }
     var screen by remember { mutableStateOf(Screen.Home) }
     var message by remember { mutableStateOf("") }
+
+    // Set when a pasted link has list= in it and the person still has to choose between
+    // "just this video" and "whole playlist". Holds that link while the pop-up is open.
+    var playlistChoice by remember { mutableStateOf<String?>(null) }
     var isDownloading by remember { mutableStateOf(false) }
     var downloadProgress by remember { mutableIntStateOf(0) }
     var downloadStatus by remember { mutableStateOf("Preparing download…") }
@@ -234,6 +246,23 @@ internal fun MultiDLScreen(
                     }) {
                         downloadProgress = 100
                     }
+
+                    // Keep Android from freezing the app while there is work to do.
+                    val hasWork = updatedQueue.any {
+                        it.state == DownloadState.QUEUED || it.state == DownloadState.DOWNLOADING
+                    }
+
+                    if (hasWork) {
+                        val waiting = updatedQueue.count { it.state == DownloadState.QUEUED }
+                        val text = when {
+                            activeDownload == null -> "Starting next download…"
+                            waiting > 0 -> "Downloading ${activeDownload.progress}% · $waiting waiting"
+                            else -> "Downloading ${activeDownload.progress}%"
+                        }
+                        DownloadService.show(activityContext, text, activeDownload?.progress ?: -1)
+                    } else {
+                        DownloadService.stop(activityContext)
+                    }
                 }
             },
             onStartDownload = { item, onProgress, onComplete, onStopped ->
@@ -337,9 +366,14 @@ internal fun MultiDLScreen(
                             }
                             onComplete(true, title, null)
                         } else {
-                            val error = "Couldn't save the downloaded file to Downloads/MultiDL."
+                            // When Python fails it puts the real reason in "title".
+                            val error = if (!success && title.isNotBlank()) {
+                                title
+                            } else {
+                                "Couldn't save the downloaded file to Downloads/MultiDL."
+                            }
                             mainHandler.post {
-                                message = error
+                                message = "Download failed: $error"
                             }
                             onComplete(false, title, error)
                         }
@@ -380,6 +414,111 @@ internal fun MultiDLScreen(
         )
     }
 
+    // Opens the person's email app with a message to the developer ready to write.
+    // Their email address is only shared if they choose to send the message.
+    fun sendFeedbackEmail() {
+        val feedbackEmail = "mrrwhoo3@gmail.com"
+
+        val versionName = try {
+            activityContext.packageManager
+                .getPackageInfo(activityContext.packageName, 0)
+                .versionName
+        } catch (e: Exception) {
+            "unknown"
+        }
+
+        // Blank space at the top to type in, details underneath that help with bug reports.
+        val body = "\n\n\n---\n" +
+                "App: MultiDL $versionName\n" +
+                "Android: ${Build.VERSION.RELEASE}\n" +
+                "Phone: ${Build.MANUFACTURER} ${Build.MODEL}\n"
+
+        val intent = Intent(Intent.ACTION_SENDTO).apply {
+            data = Uri.parse("mailto:")
+            putExtra(Intent.EXTRA_EMAIL, arrayOf(feedbackEmail))
+            putExtra(Intent.EXTRA_SUBJECT, "MultiDL feedback")
+            putExtra(Intent.EXTRA_TEXT, body)
+        }
+
+        try {
+            activityContext.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            // No email app on this phone: copy the address so they can send it from anywhere.
+            val clipboard = activityContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("Feedback email", feedbackEmail))
+            Toast.makeText(
+                activityContext,
+                "No email app found. Address copied: $feedbackEmail",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    // True for a YouTube link that has a list= part, e.g. watch?v=abc&list=xyz
+    fun hasPlaylistParameter(link: String): Boolean {
+        val uri = Uri.parse(link)
+        val host = uri.host?.lowercase() ?: return false
+
+        val isYouTube = host == "youtu.be" ||
+                host == "youtube.com" ||
+                host.endsWith(".youtube.com")
+
+        return isYouTube && !uri.getQueryParameter("list").isNullOrBlank()
+    }
+
+    // youtube.com/playlist?list=xyz is only a playlist, there is no single video to pick.
+    fun isPurePlaylistLink(link: String): Boolean {
+        return Uri.parse(link).path?.startsWith("/playlist") == true
+    }
+
+    // Reads the playlist in Python (off the main thread, it needs the internet), then
+    // adds every video to the queue. The queue downloads them one at a time.
+    fun queuePlaylist(link: String, format: String) {
+        message = "Reading playlist…"
+
+        Thread {
+            try {
+                val raw = Python.getInstance()
+                    .getModule("android_download_handler")
+                    .callAttr("list_playlist", link)
+                    .toString()
+
+                val result = JSONObject(raw)
+
+                if (!result.optBoolean("success")) {
+                    val error = result.optString("error", "Unknown error")
+                    mainHandler.post { message = "Couldn't read the playlist: $error" }
+                    return@Thread
+                }
+
+                val entries = result.getJSONArray("entries")
+                val videos = (0 until entries.length()).map { i ->
+                    val entry = entries.getJSONObject(i)
+                    Pair(entry.getString("url"), entry.optString("title", ""))
+                }
+                val truncated = result.optBoolean("truncated")
+
+                mainHandler.post {
+                    if (videos.isEmpty()) {
+                        message = "No downloadable videos found in that playlist."
+                    } else {
+                        downloadManager.addDownloads(videos, format)
+                        url = ""
+                        message = if (truncated) {
+                            "Added the first ${videos.size} videos of the playlist."
+                        } else {
+                            "Added ${videos.size} videos to the queue."
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    message = "Couldn't read the playlist: ${e.message}"
+                }
+            }
+        }.start()
+    }
+
     fun startDownload() {
         val submittedUrl = url.trim()
 
@@ -391,6 +530,17 @@ internal fun MultiDLScreen(
             !submittedUrl.startsWith("https://") &&
             !submittedUrl.startsWith("http://") -> {
                 message = "Enter a valid URL starting with http:// or https://."
+            }
+
+            // A link with list= in it: it is a playlist, or a video inside one.
+            hasPlaylistParameter(submittedUrl) -> {
+                message = ""
+
+                if (isPurePlaylistLink(submittedUrl)) {
+                    queuePlaylist(submittedUrl, selectedFormat)
+                } else {
+                    playlistChoice = submittedUrl   // ask: just this video, or all of it?
+                }
             }
 
             else -> {
@@ -408,6 +558,38 @@ internal fun MultiDLScreen(
             else -> Screen.Home
         }
     }
+    // Asked only for links that have list= in them (see startDownload).
+    playlistChoice?.let { link ->
+        AlertDialog(
+            onDismissRequest = { playlistChoice = null },
+            title = { Text("Download the playlist?") },
+            text = {
+                Text("This link is part of a playlist. Download just this video, or every video in the playlist?")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        playlistChoice = null
+                        queuePlaylist(link, selectedFormat)
+                    }
+                ) {
+                    Text("Whole playlist")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        playlistChoice = null
+                        downloadManager.addDownload(link, selectedFormat)
+                        url = ""
+                    }
+                ) {
+                    Text("Just this video")
+                }
+            }
+        )
+    }
+
     AppBackground {
         when (screen) {
             Screen.Home -> HomeScreen(
@@ -457,6 +639,7 @@ internal fun MultiDLScreen(
                 onDarkChange = onDarkChange,
                 onOpenAbout = { screen = Screen.About },
                 onOpenLicences = { screen = Screen.Licences },
+                onSendFeedback = { sendFeedbackEmail() },
                 onBack = { screen = Screen.Home }
             )
 
