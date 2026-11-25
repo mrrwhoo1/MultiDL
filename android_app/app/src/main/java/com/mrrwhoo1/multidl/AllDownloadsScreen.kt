@@ -1,6 +1,5 @@
 package com.mrrwhoo1.multidl
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,12 +15,15 @@ import androidx.compose.ui.unit.dp
 internal fun AllDownloadsScreen(
     files: List<DownloadedMedia>,
     onOpenFile: (DownloadedMedia) -> Unit,
-                               onDeleteFile: (DownloadedMedia) -> Unit,
-                               onRenameFile: (DownloadedMedia, String) -> Unit,
-                               onBack: () -> Unit
+                                onDeleteFile: (DownloadedMedia) -> Unit,
+                                onRenameFile: (DownloadedMedia, String) -> Unit,
+                                onBack: () -> Unit
 ) {
     val colors = LocalAppColors.current
     var selectedFilter by remember { mutableStateOf("All") }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedUris by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showBulkDeleteDialog by remember { mutableStateOf(false) }
 
     // Audio files are identified by their MIME type; everything else is treated as video.
     val filteredFiles = when (selectedFilter) {
@@ -30,6 +32,33 @@ internal fun AllDownloadsScreen(
         else -> files
     }
 
+    // Drop selections for files that have disappeared (for example after deletion).
+    LaunchedEffect(files) {
+        val existingUris = files.map { it.uri.toString() }.toSet()
+        selectedUris = selectedUris.intersect(existingUris)
+        if (files.isEmpty()) {
+            selectionMode = false
+            selectedUris = emptySet()
+        }
+    }
+
+    fun leaveSelectionMode() {
+        selectionMode = false
+        selectedUris = emptySet()
+    }
+
+    fun toggleSelection(file: DownloadedMedia) {
+        val key = file.uri.toString()
+        selectedUris = if (key in selectedUris) {
+            selectedUris - key
+        } else {
+            selectedUris + key
+        }
+    }
+
+    val allVisibleSelected = filteredFiles.isNotEmpty() &&
+    filteredFiles.all { it.uri.toString() in selectedUris }
+
     Column(
         modifier = Modifier
         .fillMaxSize()
@@ -37,11 +66,33 @@ internal fun AllDownloadsScreen(
         .navigationBarsPadding()
         .padding(horizontal = 20.dp)
     ) {
-        ScreenHeader(
-            title = "All downloads",
-            subtitle = if (files.size == 1) "1 file" else "${files.size} files",
-                     onBack = onBack
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(modifier = Modifier.weight(1f)) {
+                ScreenHeader(
+                    title = "All downloads",
+                    subtitle = if (selectionMode) {
+                        "${selectedUris.size} selected"
+                    } else if (files.size == 1) {
+                        "1 file"
+                    } else {
+                        "${files.size} files"
+                    },
+                    onBack = onBack
+                )
+            }
+
+            TextButton(
+                onClick = {
+                    if (selectionMode) leaveSelectionMode()
+                        else selectionMode = true
+                }
+            ) {
+                Text(if (selectionMode) "Cancel" else "Select")
+            }
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -90,16 +141,103 @@ internal fun AllDownloadsScreen(
                        contentPadding = PaddingValues(bottom = 16.dp)
             ) {
                 items(filteredFiles, key = { it.uri.toString() }) { file ->
-                    // Sits straight on the background, so it uses the panel colour.
-                    FileRow(
-                        file = file,
-                        containerColor = colors.panel.copy(alpha = 0.93f),
-                            onOpen = onOpenFile,
-                            onDelete = onDeleteFile,
-                            onRename = onRenameFile
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (selectionMode) {
+                            Checkbox(
+                                checked = file.uri.toString() in selectedUris,
+                                     onCheckedChange = { toggleSelection(file) }
+                            )
+                        }
+
+                        Box(modifier = Modifier.weight(1f)) {
+                            FileRow(
+                                file = file,
+                                containerColor = colors.panel.copy(alpha = 0.93f),
+                                    onOpen = { selectedFile ->
+                                        if (selectionMode) {
+                                            toggleSelection(selectedFile)
+                                        } else {
+                                            onOpenFile(selectedFile)
+                                        }
+                                    },
+                                    onDelete = onDeleteFile,
+                                    onRename = onRenameFile
+                            )
+                        }
+                    }
                 }
             }
         }
+
+        if (selectionMode) {
+            Row(
+                modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(
+                    onClick = {
+                        selectedUris = if (allVisibleSelected) {
+                            selectedUris - filteredFiles.map { it.uri.toString() }.toSet()
+                        } else {
+                            selectedUris + filteredFiles.map { it.uri.toString() }
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(if (allVisibleSelected) "Deselect all" else "Select all")
+                }
+
+                Button(
+                    onClick = { showBulkDeleteDialog = true },
+                    enabled = selectedUris.isNotEmpty(),
+                       colors = ButtonDefaults.buttonColors(
+                           containerColor = MaterialTheme.colorScheme.error
+                       ),
+                       modifier = Modifier.weight(1f)
+                ) {
+                    Text("Delete (${selectedUris.size})")
+                }
+            }
+        }
+    }
+
+    if (showBulkDeleteDialog) {
+        val filesToDelete = files.filter { it.uri.toString() in selectedUris }
+        AlertDialog(
+            onDismissRequest = { showBulkDeleteDialog = false },
+            title = { Text("Delete selected files?") },
+                    text = {
+                        Text(
+                            if (filesToDelete.size == 1) {
+                                "This file will be permanently deleted."
+                            } else {
+                                "${filesToDelete.size} files will be permanently deleted."
+                            }
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                filesToDelete.forEach(onDeleteFile)
+                                showBulkDeleteDialog = false
+                                leaveSelectionMode()
+                            }
+                        ) {
+                            Text("Delete", color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showBulkDeleteDialog = false }) {
+                            Text("Cancel")
+                        }
+                    }
+        )
     }
 }

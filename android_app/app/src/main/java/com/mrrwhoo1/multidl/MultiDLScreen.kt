@@ -1,6 +1,9 @@
 package com.mrrwhoo1.multidl
 
 import android.Manifest
+import android.app.Activity
+import android.app.RecoverableSecurityException
+import androidx.activity.result.IntentSenderRequest
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -49,15 +52,18 @@ internal fun MultiDLScreen(
     // Set when a pasted link has list= in it and the person still has to choose between
     // "just this video" and "whole playlist". Holds that link while the pop-up is open.
     var playlistChoice by remember { mutableStateOf<String?>(null) }
-    var isDownloading by remember { mutableStateOf(false) }
-    var downloadProgress by remember { mutableIntStateOf(0) }
-    var downloadStatus by remember { mutableStateOf("Preparing download…") }
-    var downloadQueue by remember { mutableStateOf<List<DownloadItem>>(emptyList()) }
+
+    // The queue lives in DownloadCenter, not in this screen, so it survives this screen
+    // being rebuilt. Everything below is just read from it.
+    val downloadQueue = DownloadCenter.queue
+    val activeDownload = downloadQueue.firstOrNull { it.state == DownloadState.DOWNLOADING }
+    val isDownloading = activeDownload != null
+    val downloadProgress = activeDownload?.progress ?: 100
+    val downloadStatus = activeDownload?.status ?: "Preparing download…"
     var downloadedFiles by remember {
         mutableStateOf<List<DownloadedMedia>>(emptyList())
     }
 
-    val downloadExecutor = remember { Executors.newSingleThreadExecutor() }
     val activityContext = LocalContext.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
@@ -187,11 +193,61 @@ internal fun MultiDLScreen(
         }
     }
 
-    fun deleteDownloadedFile(file: DownloadedMedia) {
-        try {
-            activityContext.contentResolver.delete(file.uri, null, null)
+    // Files saved by an earlier install of the app no longer belong to this install, so
+    // Android will not let the app delete them silently. It shows its own pop-up asking the
+    // person to allow it, and this launcher receives their answer.
+    val deleteConfirmLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
             refreshDownloads()
             message = ""
+        }
+    }
+
+    // Shows Android's "Allow MultiDL to delete this file?" pop-up.
+    //  Android 11 and newer: MediaStore.createDeleteRequest builds it.
+    //  Android 10: the SecurityException itself carries it (RecoverableSecurityException).
+    fun askAndroidToDelete(file: DownloadedMedia, error: SecurityException?) {
+        try {
+            val intentSender = when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
+                MediaStore.createDeleteRequest(
+                    activityContext.contentResolver,
+                    listOf(file.uri)
+                ).intentSender
+
+                Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
+                error is RecoverableSecurityException ->
+                error.userAction.actionIntent.intentSender
+
+                else -> null
+            }
+
+            if (intentSender != null) {
+                deleteConfirmLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
+            } else {
+                message = "Could not delete file: ${error?.message ?: "permission denied"}"
+            }
+        } catch (e: Exception) {
+            message = "Could not delete file: ${e.message ?: "unknown error"}"
+        }
+    }
+
+    fun deleteDownloadedFile(file: DownloadedMedia) {
+        try {
+            val rowsDeleted = activityContext.contentResolver.delete(file.uri, null, null)
+
+            if (rowsDeleted > 0) {
+                refreshDownloads()
+                message = ""
+            } else {
+                // Some phones delete nothing and raise no error for files this install
+                // does not own. Treat that the same as being refused.
+                askAndroidToDelete(file, null)
+            }
+        } catch (e: SecurityException) {
+            askAndroidToDelete(file, e)
         } catch (e: Exception) {
             message = "Could not delete file: ${e.message ?: "unknown error"}"
         }
@@ -224,194 +280,24 @@ internal fun MultiDLScreen(
             }
     }
 
-    // The download manager controls the queue. The executor runs the existing
-    // Python downloader away from the main UI thread.
-    val downloadManager = remember {
-        MultiDLDownloadManager(
-            onQueueChanged = { updatedQueue ->
-                mainHandler.post {
-                    downloadQueue = updatedQueue
+    // The download manager, and the code that actually runs downloads, live in
+    // DownloadCenter (set up in MainActivity).
+    val downloadManager = DownloadCenter.manager
 
-                    val activeDownload = updatedQueue.firstOrNull {
-                        it.state == DownloadState.DOWNLOADING
-                    }
+    // DownloadCenter can finish a download while this screen is not on screen.
+    // When the screen is on, it reacts to what the center reports.
+    val seenMessageVersion = remember { DownloadCenter.messageVersion }
+    LaunchedEffect(DownloadCenter.messageVersion) {
+        if (DownloadCenter.messageVersion != seenMessageVersion) {
+            message = DownloadCenter.lastMessage
+        }
+    }
 
-                    isDownloading = activeDownload != null
-
-                    if (activeDownload != null) {
-                        downloadProgress = activeDownload.progress
-                        downloadStatus = activeDownload.status
-                    } else if (updatedQueue.none {
-                        it.state == DownloadState.QUEUED
-                    }) {
-                        downloadProgress = 100
-                    }
-
-                    // Keep Android from freezing the app while there is work to do.
-                    val hasWork = updatedQueue.any {
-                        it.state == DownloadState.QUEUED || it.state == DownloadState.DOWNLOADING
-                    }
-
-                    if (hasWork) {
-                        val waiting = updatedQueue.count { it.state == DownloadState.QUEUED }
-                        val text = when {
-                            activeDownload == null -> "Starting next download…"
-                            waiting > 0 -> "Downloading ${activeDownload.progress}% · $waiting waiting"
-                            else -> "Downloading ${activeDownload.progress}%"
-                        }
-                        DownloadService.show(activityContext, text, activeDownload?.progress ?: -1)
-                    } else {
-                        DownloadService.stop(activityContext)
-                    }
-                }
-            },
-            onStartDownload = { item, onProgress, onComplete, onStopped ->
-                downloadExecutor.execute {
-                    try {
-                        val python = Python.getInstance()
-                        val downloader = python.getModule("android_download_handler")
-
-                        val downloadDir = File(
-                            activityContext.getExternalFilesDir(null),
-                                               "MultiDL"
-                        ).apply { mkdirs() }
-
-                        val result: PyObject = downloader.callAttr(
-                            "download",
-                            item.format,
-                            item.url,
-                            object : DownloadProgressListener {
-                                override fun onProgress(percent: Int, status: String) {
-                                    onProgress(percent, status)
-                                }
-                            },
-                            downloadDir.absolutePath,
-                            item.id
-                        )
-
-                        // Python reports "pause" or "cancel" here when the user stopped it.
-                        val stopped = result.callAttr("get", "stopped", "")?.toString() ?: ""
-                        if (stopped.isNotEmpty()) {
-                            onStopped(stopped)
-                            return@execute
-                        }
-
-                        val success = result.callAttr("get", "success").toBoolean()
-                        val title = result.callAttr("get", "title").toString()
-                        val filePath = result.callAttr("get", "file_path").toString()
-
-                        var savedToPublicDownloads = false
-
-                        if (success && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            val sourceFile = File(filePath)
-
-                            if (sourceFile.isFile) {
-                                val extension = sourceFile.extension.lowercase()
-
-                                val mimeType = when (extension) {
-                                    "mp3" -> "audio/mpeg"
-                                    "mp4", "m4v" -> "video/mp4"
-                                    "mkv" -> "video/x-matroska"
-                                    "webm" -> "video/webm"
-                                    "m4a" -> "audio/mp4"
-                                    "aac" -> "audio/aac"
-                                    "opus", "ogg" -> "audio/ogg"
-                                    "wav" -> "audio/wav"
-                                    "flac" -> "audio/flac"
-                                    else -> "application/octet-stream"
-                                }
-
-                                val values = ContentValues().apply {
-                                    put(MediaStore.MediaColumns.DISPLAY_NAME, sourceFile.name)
-                                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                                    put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/MultiDL")
-                                    put(MediaStore.MediaColumns.IS_PENDING, 1)
-                                }
-
-                                val resolver = activityContext.contentResolver
-                                val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-                                val uri = resolver.insert(collection, values)
-
-                                if (uri != null) {
-                                    try {
-                                        val output = resolver.openOutputStream(uri)
-                                        ?: throw java.io.IOException(
-                                            "Could not open destination file."
-                                        )
-
-                                        output.use { destination ->
-                                            sourceFile.inputStream().use { input ->
-                                                input.copyTo(destination)
-                                            }
-                                        }
-
-                                        val completedValues = ContentValues().apply {
-                                            put(MediaStore.MediaColumns.IS_PENDING, 0)
-                                        }
-
-                                        resolver.update(uri, completedValues, null, null)
-                                        savedToPublicDownloads = true
-                                    } catch (e: Exception) {
-                                        resolver.delete(uri, null, null)
-                                        throw e
-                                    }
-                                }
-                            }
-                        }
-
-                        if (savedToPublicDownloads) {
-                            mainHandler.post {
-                                refreshDownloads()
-                                message = "Completed"
-                            }
-                            onComplete(true, title, null)
-                        } else {
-                            // When Python fails it puts the real reason in "title".
-                            val error = if (!success && title.isNotBlank()) {
-                                title
-                            } else {
-                                "Couldn't save the downloaded file to Downloads/MultiDL."
-                            }
-                            mainHandler.post {
-                                message = "Download failed: $error"
-                            }
-                            onComplete(false, title, error)
-                        }
-                    } catch (e: Exception) {
-                        val error = e.message ?: "Could not start Python downloader."
-                        mainHandler.post {
-                            message = "Download failed: $error"
-                        }
-                        onComplete(false, "", error)
-                    }
-                }
-            },
-
-            // The download executor is busy downloading, so stop requests
-            // are sent to Python from their own short-lived thread.
-            onStopRequest = { id, reason ->
-                Thread {
-                    try {
-                        Python.getInstance()
-                        .getModule("android_download_handler")
-                        .callAttr("request_stop", id, reason)
-                    } catch (e: Exception) {
-                        Log.w("MultiDL", "Could not send stop request: ${e.message}")
-                    }
-                }.start()
-            },
-            onDiscardPartial = { id ->
-                Thread {
-                    try {
-                        Python.getInstance()
-                        .getModule("android_download_handler")
-                        .callAttr("discard_partial", id)
-                    } catch (e: Exception) {
-                        Log.w("MultiDL", "Could not discard partial files: ${e.message}")
-                    }
-                }.start()
-            }
-        )
+    val seenFilesVersion = remember { DownloadCenter.filesVersion }
+    LaunchedEffect(DownloadCenter.filesVersion) {
+        if (DownloadCenter.filesVersion != seenFilesVersion) {
+            refreshDownloads()
+        }
     }
 
     // Opens the person's email app with a message to the developer ready to write.
@@ -421,17 +307,17 @@ internal fun MultiDLScreen(
 
         val versionName = try {
             activityContext.packageManager
-                .getPackageInfo(activityContext.packageName, 0)
-                .versionName
+            .getPackageInfo(activityContext.packageName, 0)
+            .versionName
         } catch (e: Exception) {
             "unknown"
         }
 
         // Blank space at the top to type in, details underneath that help with bug reports.
         val body = "\n\n\n---\n" +
-                "App: MultiDL $versionName\n" +
-                "Android: ${Build.VERSION.RELEASE}\n" +
-                "Phone: ${Build.MANUFACTURER} ${Build.MODEL}\n"
+        "App: MultiDL $versionName\n" +
+        "Android: ${Build.VERSION.RELEASE}\n" +
+        "Phone: ${Build.MANUFACTURER} ${Build.MODEL}\n"
 
         val intent = Intent(Intent.ACTION_SENDTO).apply {
             data = Uri.parse("mailto:")
@@ -460,8 +346,8 @@ internal fun MultiDLScreen(
         val host = uri.host?.lowercase() ?: return false
 
         val isYouTube = host == "youtu.be" ||
-                host == "youtube.com" ||
-                host.endsWith(".youtube.com")
+        host == "youtube.com" ||
+        host.endsWith(".youtube.com")
 
         return isYouTube && !uri.getQueryParameter("list").isNullOrBlank()
     }
@@ -479,9 +365,9 @@ internal fun MultiDLScreen(
         Thread {
             try {
                 val raw = Python.getInstance()
-                    .getModule("android_download_handler")
-                    .callAttr("list_playlist", link)
-                    .toString()
+                .getModule("android_download_handler")
+                .callAttr("list_playlist", link)
+                .toString()
 
                 val result = JSONObject(raw)
 
@@ -503,6 +389,7 @@ internal fun MultiDLScreen(
                         message = "No downloadable videos found in that playlist."
                     } else {
                         downloadManager.addDownloads(videos, format)
+                        BatteryOptimization.askOnce(activityContext)
                         url = ""
                         message = if (truncated) {
                             "Added the first ${videos.size} videos of the playlist."
@@ -546,6 +433,7 @@ internal fun MultiDLScreen(
             else -> {
                 message = ""
                 downloadManager.addDownload(submittedUrl, selectedFormat)
+                BatteryOptimization.askOnce(activityContext)
                 url = ""
             }
         }
@@ -563,30 +451,31 @@ internal fun MultiDLScreen(
         AlertDialog(
             onDismissRequest = { playlistChoice = null },
             title = { Text("Download the playlist?") },
-            text = {
-                Text("This link is part of a playlist. Download just this video, or every video in the playlist?")
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        playlistChoice = null
-                        queuePlaylist(link, selectedFormat)
+                    text = {
+                        Text("This link is part of a playlist. Download just this video, or every video in the playlist?")
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                playlistChoice = null
+                                queuePlaylist(link, selectedFormat)
+                            }
+                        ) {
+                            Text("Whole playlist")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                playlistChoice = null
+                                downloadManager.addDownload(link, selectedFormat)
+                                BatteryOptimization.askOnce(activityContext)
+                                url = ""
+                            }
+                        ) {
+                            Text("Just this video")
+                        }
                     }
-                ) {
-                    Text("Whole playlist")
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        playlistChoice = null
-                        downloadManager.addDownload(link, selectedFormat)
-                        url = ""
-                    }
-                ) {
-                    Text("Just this video")
-                }
-            }
         )
     }
 
@@ -640,7 +529,7 @@ internal fun MultiDLScreen(
                 onOpenAbout = { screen = Screen.About },
                 onOpenLicences = { screen = Screen.Licences },
                 onSendFeedback = { sendFeedbackEmail() },
-                onBack = { screen = Screen.Home }
+                                              onBack = { screen = Screen.Home }
             )
 
             Screen.About -> AboutScreen(

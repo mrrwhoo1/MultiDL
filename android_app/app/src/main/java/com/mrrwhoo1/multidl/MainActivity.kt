@@ -34,7 +34,7 @@ class MainActivity : ComponentActivity() {
     // Android 13+ asks permission before an app may show notifications.
     // Without it the background download still works, but its notification is hidden.
     private val notificationPermissionLauncher =
-    registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,6 +53,9 @@ class MainActivity : ComponentActivity() {
         if (!Python.isStarted()) {
             Python.start(AndroidPlatform(this))
         }
+
+        // The download queue lives here, outside any screen, so it outlives screen rebuilds.
+        DownloadCenter.init(applicationContext)
 
         setContent {
             //======================Update checker
