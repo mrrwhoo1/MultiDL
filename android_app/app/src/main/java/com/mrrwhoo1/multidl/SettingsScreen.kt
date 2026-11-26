@@ -17,8 +17,8 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 internal fun SettingsScreen(
-    isDark: Boolean,
-    onDarkChange: (Boolean) -> Unit,
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit,
                            onOpenAbout: () -> Unit,
                            onOpenLicences: () -> Unit,
                            onSendFeedback: () -> Unit,
@@ -43,36 +43,49 @@ internal fun SettingsScreen(
                 color = colors.panel.copy(alpha = 0.93f)
         ) {
             Column {
-                // Theme switch
-                Row(
+                // Theme selector: System (follow the phone), Light or Dark.
+                Column(
                     modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    .padding(16.dp)
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Dark theme",
-                             color = colors.text,
-                             fontWeight = FontWeight.SemiBold,
-                             fontSize = 16.sp
-                        )
-
-                        Text(
-                            text = if (isDark) "On (switch off for the light theme)" else "Off (light theme)",
-                             color = colors.muted,
-                             fontSize = 13.sp
-                        )
-                    }
-
-                    Switch(
-                        checked = isDark,
-                        onCheckedChange = onDarkChange,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = colors.accent
-                        )
+                    Text(
+                        text = "Theme",
+                         color = colors.text,
+                         fontWeight = FontWeight.SemiBold,
+                         fontSize = 16.sp
                     )
+
+                    Text(
+                        text = when (themeMode) {
+                            ThemeMode.SYSTEM -> "Follows your phone's light or dark setting"
+                            ThemeMode.LIGHT -> "Always light"
+                            ThemeMode.DARK -> "Always dark"
+                        },
+                         color = colors.muted,
+                         fontSize = 13.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            ThemeMode.SYSTEM to "System",
+                            ThemeMode.LIGHT to "Light",
+                            ThemeMode.DARK to "Dark"
+                        ).forEach { (mode, label) ->
+                            FilterChip(
+                                selected = themeMode == mode,
+                                onClick = { onThemeModeChange(mode) },
+                                label = { Text(label) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = colors.accent.copy(alpha = 0.22f),
+                                    selectedLabelColor = colors.text,
+                                    labelColor = colors.muted
+                                )
+                            )
+                        }
+                    }
                 }
 
                 // Thin divider

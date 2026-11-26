@@ -20,6 +20,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
@@ -73,16 +74,36 @@ class MainActivity : ComponentActivity() {
             }
             //==================================
             val prefs = remember { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
-            var isDark by remember {
-                mutableStateOf(prefs.getBoolean(KEY_DARK_THEME, true))
+            var themeMode by remember {
+                mutableStateOf(
+                    when {
+                        // A choice made with the new System / Light / Dark selector.
+                        prefs.contains(KEY_THEME_MODE) ->
+                            ThemeMode.fromSaved(prefs.getString(KEY_THEME_MODE, null))
+
+                        // Someone who used the old dark/light switch keeps what they picked.
+                        prefs.contains(KEY_DARK_THEME) ->
+                            if (prefs.getBoolean(KEY_DARK_THEME, true)) ThemeMode.DARK else ThemeMode.LIGHT
+
+                        // Brand new install: follow the phone.
+                        else -> ThemeMode.SYSTEM
+                    }
+                )
+            }
+
+            // isSystemInDarkTheme() is the phone's current setting, and it updates by itself.
+            val isDark = when (themeMode) {
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+                ThemeMode.SYSTEM -> isSystemInDarkTheme()
             }
 
             MultiDLTheme(isDark = isDark) {
                 MultiDLScreen(
-                    isDark = isDark,
-                    onDarkChange = { newValue ->
-                        isDark = newValue
-                        prefs.edit().putBoolean(KEY_DARK_THEME, newValue).apply()
+                    themeMode = themeMode,
+                    onThemeModeChange = { newMode ->
+                        themeMode = newMode
+                        prefs.edit().putString(KEY_THEME_MODE, newMode.saved).apply()
                     }
                 )
                 //update pop up AletDialog window

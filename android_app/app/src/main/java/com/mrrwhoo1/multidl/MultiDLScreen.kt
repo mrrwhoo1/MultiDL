@@ -41,8 +41,8 @@ import java.util.concurrent.Executors
  */
 @Composable
 internal fun MultiDLScreen(
-    isDark: Boolean,
-    onDarkChange: (Boolean) -> Unit
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit
 ) {
     var url by remember { mutableStateOf("") }
     var selectedFormat by remember { mutableStateOf("HD") }
@@ -215,14 +215,14 @@ internal fun MultiDLScreen(
         try {
             val intentSender = when {
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
-                MediaStore.createDeleteRequest(
-                    activityContext.contentResolver,
-                    listOf(file.uri)
-                ).intentSender
+                    MediaStore.createDeleteRequest(
+                        activityContext.contentResolver,
+                        listOf(file.uri)
+                    ).intentSender
 
                 Build.VERSION.SDK_INT == Build.VERSION_CODES.Q &&
-                error is RecoverableSecurityException ->
-                error.userAction.actionIntent.intentSender
+                        error is RecoverableSecurityException ->
+                    error.userAction.actionIntent.intentSender
 
                 else -> null
             }
@@ -310,17 +310,17 @@ internal fun MultiDLScreen(
 
         val versionName = try {
             activityContext.packageManager
-            .getPackageInfo(activityContext.packageName, 0)
-            .versionName
+                .getPackageInfo(activityContext.packageName, 0)
+                .versionName
         } catch (e: Exception) {
             "unknown"
         }
 
         // Blank space at the top to type in, details underneath that help with bug reports.
         val body = "\n\n\n---\n" +
-        "App: MultiDL $versionName\n" +
-        "Android: ${Build.VERSION.RELEASE}\n" +
-        "Phone: ${Build.MANUFACTURER} ${Build.MODEL}\n"
+                "App: MultiDL $versionName\n" +
+                "Android: ${Build.VERSION.RELEASE}\n" +
+                "Phone: ${Build.MANUFACTURER} ${Build.MODEL}\n"
 
         val intent = Intent(Intent.ACTION_SENDTO).apply {
             data = Uri.parse("mailto:")
@@ -349,8 +349,8 @@ internal fun MultiDLScreen(
         val host = uri.host?.lowercase() ?: return false
 
         val isYouTube = host == "youtu.be" ||
-        host == "youtube.com" ||
-        host.endsWith(".youtube.com")
+                host == "youtube.com" ||
+                host.endsWith(".youtube.com")
 
         return isYouTube && !uri.getQueryParameter("list").isNullOrBlank()
     }
@@ -368,9 +368,9 @@ internal fun MultiDLScreen(
         Thread {
             try {
                 val raw = Python.getInstance()
-                .getModule("android_download_handler")
-                .callAttr("list_playlist", link)
-                .toString()
+                    .getModule("android_download_handler")
+                    .callAttr("list_playlist", link)
+                    .toString()
 
                 val result = JSONObject(raw)
 
@@ -397,8 +397,8 @@ internal fun MultiDLScreen(
                         playlistPreview = PlaylistPreview(
                             title = playlistTitle,
                             videos = videos.map { PlaylistVideo(url = it.first, title = it.second) },
-                                                          truncated = truncated,
-                                                          format = format
+                            truncated = truncated,
+                            format = format
                         )
                     }
                 }
@@ -458,7 +458,7 @@ internal fun MultiDLScreen(
                 playlistPreview = null
                 downloadManager.addDownloads(
                     chosen.map { Pair(it.url, it.title) },
-                                             preview.format
+                    preview.format
                 )
                 BatteryOptimization.askOnce(activityContext)
                 url = ""
@@ -477,31 +477,31 @@ internal fun MultiDLScreen(
         AlertDialog(
             onDismissRequest = { playlistChoice = null },
             title = { Text("Download the playlist?") },
-                    text = {
-                        Text("This link is part of a playlist. Download just this video, or every video in the playlist?")
-                    },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                playlistChoice = null
-                                queuePlaylist(link, selectedFormat)
-                            }
-                        ) {
-                            Text("Whole playlist")
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = {
-                                playlistChoice = null
-                                downloadManager.addDownload(link, selectedFormat)
-                                BatteryOptimization.askOnce(activityContext)
-                                url = ""
-                            }
-                        ) {
-                            Text("Just this video")
-                        }
+            text = {
+                Text("This link is part of a playlist. Download just this video, or every video in the playlist?")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        playlistChoice = null
+                        queuePlaylist(link, selectedFormat)
                     }
+                ) {
+                    Text("Whole playlist")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        playlistChoice = null
+                        downloadManager.addDownload(link, selectedFormat)
+                        BatteryOptimization.askOnce(activityContext)
+                        url = ""
+                    }
+                ) {
+                    Text("Just this video")
+                }
+            }
         )
     }
 
@@ -550,12 +550,12 @@ internal fun MultiDLScreen(
             )
 
             Screen.Settings -> SettingsScreen(
-                isDark = isDark,
-                onDarkChange = onDarkChange,
+                themeMode = themeMode,
+                onThemeModeChange = onThemeModeChange,
                 onOpenAbout = { screen = Screen.About },
                 onOpenLicences = { screen = Screen.Licences },
                 onSendFeedback = { sendFeedbackEmail() },
-                                              onBack = { screen = Screen.Home }
+                onBack = { screen = Screen.Home }
             )
 
             Screen.About -> AboutScreen(
