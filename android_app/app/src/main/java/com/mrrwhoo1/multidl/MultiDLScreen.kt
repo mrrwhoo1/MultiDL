@@ -53,6 +53,9 @@ internal fun MultiDLScreen(
     // "just this video" and "whole playlist". Holds that link while the pop-up is open.
     var playlistChoice by remember { mutableStateOf<String?>(null) }
 
+    // Set once a playlist has been read: the person then picks which videos to download.
+    var playlistPreview by remember { mutableStateOf<PlaylistPreview?>(null) }
+
     // The queue lives in DownloadCenter, not in this screen, so it survives this screen
     // being rebuilt. Everything below is just read from it.
     val downloadQueue = DownloadCenter.queue
@@ -383,19 +386,20 @@ internal fun MultiDLScreen(
                     Pair(entry.getString("url"), entry.optString("title", ""))
                 }
                 val truncated = result.optBoolean("truncated")
+                val playlistTitle = result.optString("title", "")
 
                 mainHandler.post {
                     if (videos.isEmpty()) {
                         message = "No downloadable videos found in that playlist."
                     } else {
-                        downloadManager.addDownloads(videos, format)
-                        BatteryOptimization.askOnce(activityContext)
-                        url = ""
-                        message = if (truncated) {
-                            "Added the first ${videos.size} videos of the playlist."
-                        } else {
-                            "Added ${videos.size} videos to the queue."
-                        }
+                        // Do not queue anything yet: show the list so the person can choose.
+                        message = ""
+                        playlistPreview = PlaylistPreview(
+                            title = playlistTitle,
+                            videos = videos.map { PlaylistVideo(url = it.first, title = it.second) },
+                                                          truncated = truncated,
+                                                          format = format
+                        )
                     }
                 }
             } catch (e: Exception) {
@@ -446,6 +450,28 @@ internal fun MultiDLScreen(
             else -> Screen.Home
         }
     }
+    // The list of videos in a playlist, shown after "Whole playlist" (or a /playlist link).
+    playlistPreview?.let { preview ->
+        PlaylistPickerDialog(
+            preview = preview,
+            onDownload = { chosen ->
+                playlistPreview = null
+                downloadManager.addDownloads(
+                    chosen.map { Pair(it.url, it.title) },
+                                             preview.format
+                )
+                BatteryOptimization.askOnce(activityContext)
+                url = ""
+                message = if (chosen.size == 1) {
+                    "Added 1 video to the queue."
+                } else {
+                    "Added ${chosen.size} videos to the queue."
+                }
+            },
+            onCancel = { playlistPreview = null }
+        )
+    }
+
     // Asked only for links that have list= in them (see startDownload).
     playlistChoice?.let { link ->
         AlertDialog(
