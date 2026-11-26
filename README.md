@@ -56,11 +56,11 @@ The project started as a Python desktop app and is now growing into a family of 
 ## Screenshots
 
 <div align="center">
-<img src="android_app/App_Screenshots/version2release_shots/Screenshot_20261126_124946_com.mrrwhoo1.multidl.jpg" width="19%" alt="Home screen with the video link box, quality selector, supported platforms and recent downloads" />
-<img src="android_app/App_Screenshots/version2release_shots/Screenshot_20261126_125042_com.mrrwhoo1.multidl.jpg" width="19%" alt="Playlist pop-up listing every video with tick boxes, Select all, Select none and a Download all button" />
-<img src="android_app/App_Screenshots/version2release_shots/Screenshot_20261126_125017_com.mrrwhoo1.multidl.jpg" width="19%" alt="Downloads screen with a paused download and Resume and Cancel buttons" />
-<img src="android_app/App_Screenshots/version2release_shots/Screenshot_20261126_125026_com.mrrwhoo1.multidl.jpg" width="19%" alt="All downloads screen listing the saved files" />
-<img src="android_app/App_Screenshots/version2release_shots/Screenshot_20261126_125030_com.mrrwhoo1.multidl.jpg" width="19%" alt="Settings with the System, Light and Dark theme selector" />
+<img src="android_app/App_Screenshots/version2release_shots/Screenshot_20261126_130225_com.mrrwhoo1.multidl.jpg" width="19%" alt="Home screen with the video link box, quality selector, supported platforms and recent downloads" />
+<img src="android_app/App_Screenshots/version2release_shots/Screenshot_20261126_130254_com.mrrwhoo1.multidl.jpg" width="19%" alt="Playlist pop-up listing every video with tick boxes, Select all, Select none and a Download all button" />
+<img src="android_app/App_Screenshots/version2release_shots/Screenshot_20261126_130311_com.mrrwhoo1.multidl.jpg" width="19%" alt="Downloads screen with one running download and four waiting in the queue, with Pause and Cancel buttons" />
+<img src="android_app/App_Screenshots/version2release_shots/Screenshot_20261126_130257_com.mrrwhoo1.multidl.jpg" width="19%" alt="All downloads screen listing the saved files" />
+<img src="android_app/App_Screenshots/version2release_shots/Screenshot_20261126_130301_com.mrrwhoo1.multidl.jpg" width="19%" alt="Settings with the System, Light and Dark theme selector" />
 </div>
 
 ## Features
