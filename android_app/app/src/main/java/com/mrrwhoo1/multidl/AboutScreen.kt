@@ -42,9 +42,9 @@ internal fun AboutScreen(onBack: () -> Unit) {
             @Suppress("DEPRECATION")
             context.packageManager
             .getPackageInfo(context.packageName, 0)
-            .versionName ?: "1.0"
+            .versionName ?: "2.0"
         } catch (e: Exception) {
-            "1.0"
+            "2.0"
         }
     }
 
