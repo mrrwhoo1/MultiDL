@@ -211,11 +211,11 @@ Downloads are saved to `~/Downloads/multidl` as `.mp4` (video) or `.mp3` (audio)
 - [x] **Android app v1.0**: HD, Data Saver and Audio downloads, progress, history with thumbnails, themes, in-app update notice.
 - [ ] **Linux desktop app**: a new desktop version of MultiDL.
 - [ ] **Windows build**: compiled from the same Flutter desktop app
-- [ ] **Better downloads**: more sites tested and tuned, and a smoother experience on slow connections
-- [ ] **Pause/Resume**: The ability to stop and resume downloads at will.
-- [ ] **Mutiple Downloads**: Allowing users to download mutiple videos/audio at the same time.
-- [ ] **Playlist Downloads**: Specifically for youtube, Users will just paste a playlist link and it autimatically downloads and saves with the original playlist name.
-- [ ] **App continuity**: Downloads working in the background, currently it works sometimes and the other half it throws a donwload link error. 
+- [x] **Better downloads**: more sites tested and tuned, and a smoother experience on slow connections
+- [x] **Pause/Resume**: The ability to stop and resume downloads at will.
+- [x] **Mutiple Downloads**: Allowing users to download mutiple videos/audio at the same time.
+- [x] **Playlist Downloads**: Specifically for youtube, Users will just paste a playlist link and it autimatically downloads and saves with the original playlist name.
+- [x] **App continuity**: Downloads working in the background, currently it works sometimes and the other half it throws a donwload link error. 
 
 Ideas and requests are welcome: please [open an issue](https://github.com/mrrwhoo1/MultiDL/issues).
 
