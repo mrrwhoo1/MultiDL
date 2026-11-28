@@ -18,25 +18,53 @@ Unlike Android, the desktop version lets yt-dlp merge the streams itself, so
 FFmpeg has to be installed on the computer (sudo apt install ffmpeg).
 """
 
+"""
+Date [24th-Nov-2026]
+-Adding playlist support now.
+
+"""
+
 import os
-import shutil
-import time
-from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
-
+import json
+import glob  # Used to find patterns in file names like *.mp3..
 import yt_dlp
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 from yt_dlp import version as ytdlp_version
+from yt_dlp.utils import sanitize_filename
 
-# Where finished downloads are saved.
-DOWNLOAD_DIR = os.path.expanduser("~/Downloads/multidl")
 
-FFMPEG_MISSING = (
-    "FFmpeg is not installed. Install it (for example: sudo apt install ffmpeg) "
-    "and try again."
-)
+# ---- Pause / Cancel support -------------------------------------------------
+# Kotlin writes "pause" or "cancel" into _stop_requests for a download id.
+# yt-dlp calls our progress hook many times a second, and the hook checks this
+# dictionary. If it finds a request it raises DownloadStopped, which interrupts
+# the download. A paused download keeps its .part file so it can continue later.
+_stop_requests = {}
+_partial_files = {}  # download id -> the .part files yt-dlp is writing for it
 
-# Sites where the video ID lives in the ?query part of the link.
-# For these hosts we keep ONLY the listed parameters (the ID) and drop the
-# tracking junk. Every other site is cleaned exactly as before (query removed).
+
+class DownloadStopped(Exception):
+    """Raised on purpose to interrupt yt-dlp when the user pauses or cancels."""
+
+
+def request_stop(download_id, reason):
+    """Called from Kotlin. reason is "pause" or "cancel"."""
+    _stop_requests[download_id] = reason
+
+
+def _delete_partial_files(download_id):
+    for path in _partial_files.pop(download_id, set()):
+        for leftover in (path, path + ".ytdl"):
+            if os.path.isfile(leftover):
+                os.remove(leftover)
+
+
+def discard_partial(download_id):
+    """Called from Kotlin when a PAUSED download is cancelled (nothing is running)."""
+    _stop_requests.pop(download_id, None)
+    _delete_partial_files(download_id)
+
+
+# Seems like during clean url it was messing with the facebook links horribly, made this to leep certain characters i saw appear alot in links.
 _QUERY_KEEP = {
     "facebook.com": {"v", "story_fbid", "id", "fbid"},
     "youtube.com": {"v"},
@@ -44,26 +72,70 @@ _QUERY_KEEP = {
 
 
 def clean_url(url):
-    parsed = urlparse(url.strip())
-    host = (parsed.hostname or "").lower()
+    parsed = urlparse(
+        url.strip()
+    )  # just removes the white spaces you might pick up in links.
+    host = (
+        parsed.hostname or ""
+    ).lower()  # gets the websites host name like youtube.com
 
     keep = set()
     for domain, keys in _QUERY_KEEP.items():
-        if host == domain or host.endswith("." + domain):
-            keep = keys
+        if host == domain or host.endswith("." + domain):  # self explainatory really.
+            # e.g if after host we get wwww.facebook.com then run the if block, domain[0] is just facebook.com so the first styatement is false
+            # but then we go to the or statemtn which says if www.facebook.com (host) == .+DOMAIN which is .facebook.com that passes as true cause it wont care about the www.
+
+            keep = keys  # if it washost was facebook then keep = {"v", "story_fbid", "id", "fbid"}.
             break
 
-    query = urlencode(
-        [(k, v) for k, v in parse_qsl(parsed.query) if k in keep]
-    )
+    filtered_params = []
 
+    for k, v in parse_qsl(
+        parsed.query
+    ):  # parse_qsl = Take a URL query string and turn it into a list of key-value pairs.
+        # [
+        #     ("v", "abc123"),
+        #     ("t", "30")
+        # ]
+        # and for the parsed.query urlparse(url) gives a parse result conatining multiple stuff like scheme, path, params, query etc so saying
+        # parsed.query just says give me the v=abc123&t=30 part of the url as query holds that part of the link. so {v : abc123...}
+        if (
+            k in keep
+        ):  # checks if that key 'v' is in keep and if it it then it is added to the filtered_params list.
+            filtered_params.append((k, v))
+
+    query = urlencode(
+        filtered_params
+    )  # opposite of parse_qsl, it gets the ("v", "abc123") and makes it back to v=abc123
+
+    # Just incase who ever reads this one day forgets that earlier urlparse(url) has slotes like
+    """
+    (
+    "https",            # scheme
+    "www.youtube.com",  # netloc
+    "/watch",           # path
+    "",                 # params
+    "v=abc123",         # query
+    ""                  # fragment
+)
+    """
     return urlunparse(
         (parsed.scheme, parsed.netloc, parsed.path, "", query, "")
-    )
+    )  # this gives back the full cleaned link.
+
+
+# if still lost loook at this https://www.youtube.com/watch?v=abc123&t=420&utm_source=google, everything before the & uniqly identifies a youtube video, keeping the whole thing would cause issues sometimes BUt from my testing youtube is a lot more forgiving, this function was primary used for FACEBOOK as this one is a completely different story ( i know the keep dictionary only has facebook and youtube for now, might expand it later if i notice more issues on the otehr sites...especially data saver as its caused me the most issues.)
+
+
+def safe_filename(title, fallback):
+    """Turn a video title into a safe file name (removes / : * ? etc.)."""
+    name = sanitize_filename(title or "", restricted=False)
+    name = name.strip(" .")[:120].rstrip(" .")
+    return name or fallback
 
 
 class _CollectLogger:
-    """Collects yt-dlp warnings so failures can explain themselves."""
+    """Collects yt-dlp warnings so failures can explain themselves. the method names are identified by ytdlp, changing them results in errors."""
 
     def __init__(self):
         self.warnings = []
@@ -81,116 +153,27 @@ class _CollectLogger:
         pass
 
 
-def _newest_new_file(folder, started_at):
-    """Fallback: the most recently modified finished file created since started_at."""
-    best, best_time = None, 0
-    for name in os.listdir(folder):
-        if name.startswith(".") or name.endswith((".part", ".ytdl", ".temp")):
-            continue
-        path = os.path.join(folder, name)
-        if not os.path.isfile(path):
-            continue
-        modified = os.path.getmtime(path)
-        if modified >= started_at - 2 and modified > best_time:
-            best, best_time = path, modified
-    return best
-
-
-def download(f, url, progress_hook=None, output_path=None):
+def download(f, url, progress_hook=None, output_path=None, download_id=""):
     logger = _CollectLogger()
 
+    # A fresh start or a resume: forget any old stop request.
+    # setdefault (not "= set()") so a resume keeps the .part files it already knows about.
+    _stop_requests.pop(download_id, None)
+    _partial_files.setdefault(download_id, set())
+
     try:
-        output_path = os.path.expanduser(output_path or DOWNLOAD_DIR)
+        if not output_path:
+            raise ValueError("Android download directory was not provided.")
+
         os.makedirs(output_path, exist_ok=True)
         url = clean_url(url)
 
-        if shutil.which("ffmpeg") is None:
-            raise RuntimeError(FFMPEG_MISSING)
-
-        last_percent = {"value": 0}
-
-        def report(percent, status):
-            if progress_hook is not None:
-                # The bar only ever moves forward (yt-dlp's size estimates can
-                # wobble, especially for streamed videos).
-                percent = max(percent, last_percent["value"])
-                last_percent["value"] = percent
-                try:
-                    progress_hook(
-                        int(max(0, min(100, round(percent)))), str(status)
-                    )
-                except Exception:
-                    # A UI callback failure must not cancel the download.
-                    pass
-
-        # yt-dlp downloads each stream (video, then audio) separately. Give each
-        # stream an equal slice of 0-88%, then use 90-100% for merging/converting.
-        stream_order = {}
-        plan = {"streams": 1}
-
-        class _Downloader(yt_dlp.YoutubeDL):
-            """Learns how many streams yt-dlp is about to download."""
-
-            def process_info(self, info_dict):
-                plan["streams"] = max(
-                    1, len(info_dict.get("requested_formats") or [])
-                )
-                return super().process_info(info_dict)
-
-        def on_yt_dlp_progress(data):
-            status = data.get("status")
-            info = data.get("info_dict") or {}
-            stream_count = plan["streams"]
-
-            key = info.get("format_id") or data.get("filename")
-            if key not in stream_order:
-                stream_order[key] = len(stream_order)
-            index = min(stream_order[key], stream_count - 1)
-
-            audio_only = f == "Audio" or info.get("vcodec") == "none"
-            label = "Downloading audio" if audio_only else "Downloading video"
-
-            span = 88.0 / stream_count
-            start = index * span
-
-            if status == "downloading":
-                downloaded = data.get("downloaded_bytes") or 0
-                total = (
-                    data.get("total_bytes")
-                    or data.get("total_bytes_estimate")
-                    or 0
-                )
-                if total > 0:
-                    report(start + span * min(1.0, downloaded / total), label)
-                else:
-                    report(start, f"{label}…")
-            elif status == "finished":
-                report(start + span, f"{label} complete")
-
-        def on_postprocess(data):
-            if data.get("status") != "started":
-                return
-            name = data.get("postprocessor")
-            if name == "Merger":
-                report(90, "Merging video and audio…")
-            elif name == "ExtractAudio":
-                report(90, "Converting to MP3…")
-
-        # Data Saver files get a label so they never overwrite an HD copy.
-        label_suffix = " (Data Saver)" if f == "Data Saver" else ""
-
-        options = {
+        common_options = {
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
             "overwrites": True,
-            "logger": logger,
-            "outtmpl": os.path.join(
-                output_path, f"%(title)s{label_suffix}.%(ext)s"
-            ),
-            "trim_file_name": 120,
-            "progress_hooks": [on_yt_dlp_progress],
-            "postprocessor_hooks": [on_postprocess],
+            "logger": logger,  # This is where the above class is used to provide warnings.
             # Social sites drop connections now and then; retry instead of failing.
             "retries": 5,
             "fragment_retries": 5,
@@ -198,46 +181,232 @@ def download(f, url, progress_hook=None, output_path=None):
             "socket_timeout": 30,
         }
 
+        # The Kotlin listener is an object with onProgress(percent, status),
+        # not a Python callable. Translate yt-dlp's progress dictionaries
+        # into calls to that listener instead of passing it directly to yt-dlp.
+        def report(percent, status):
+            if progress_hook is not None:
+                try:
+                    progress_hook.onProgress(
+                        int(max(0, min(100, round(percent)))),
+                        str(status),
+                    )
+                except Exception:
+                    # A UI callback failure must not cancel the download.
+                    pass
+
+        def check_stop():
+            if _stop_requests.get(download_id):
+                raise DownloadStopped()
+
+        def download_stream(
+            format_selector, suffix, start_percent, end_percent, label, sort=None
+        ):
+            # Also check between the video and audio streams, not only inside the hook.
+            check_stop()
+
+            options = common_options.copy()
+            options["format"] = format_selector
+            if sort:
+                options["format_sort"] = sort
+            options["outtmpl"] = os.path.join(output_path, f"%(id)s_{suffix}.%(ext)s")
+
+            def on_yt_dlp_progress(data):
+                # Remember the .part file so Cancel can delete it later.
+                if data.get("tmpfilename"):
+                    _partial_files[download_id].add(data["tmpfilename"])
+
+                # Pause / Cancel: stop yt-dlp right here.
+                check_stop()
+
+                status = data.get("status")
+
+                if status == "downloading":
+                    downloaded = data.get("downloaded_bytes") or 0
+                    total = (
+                        data.get("total_bytes") or data.get("total_bytes_estimate") or 0
+                    )
+
+                    if total > 0:
+                        fraction = min(1.0, downloaded / total)
+                        percent = (
+                            start_percent + (end_percent - start_percent) * fraction
+                        )
+                        report(percent, label)
+                    else:
+                        report(start_percent, f"{label}…")
+
+                elif status == "finished":
+                    report(end_percent, f"{label} complete")
+
+            options["progress_hooks"] = [on_yt_dlp_progress]
+
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(url, download=True)
+
+                downloads = info.get("requested_downloads") or []
+                fmt = downloads[0] if downloads else {}
+
+                paths = [
+                    item.get("filepath") or item.get("filename") for item in downloads
+                ]
+                paths = [path for path in paths if path and os.path.isfile(path)]
+
+                if paths:
+                    return paths[0], info, fmt
+
+                expected = ydl.prepare_filename(info)
+                if os.path.isfile(expected):
+                    return expected, info, fmt
+
+                pattern = os.path.join(output_path, f"{info['id']}_{suffix}.*")
+                matches = [
+                    path
+                    for path in glob.glob(pattern)
+                    if os.path.isfile(path) and not path.endswith((".part", ".ytdl"))
+                ]
+
+                if matches:
+                    return max(matches, key=os.path.getmtime), info, fmt
+
+                raise FileNotFoundError(f"Downloaded {suffix} stream was not found.")
+
+        # Audio mode: preserve the working MP3 conversion.
         if f == "Audio":
-            options["format"] = "bestaudio/best"
-            options["postprocessors"] = [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }
-            ]
-        elif f == "Data Saver":
-            # NOT "worstaudio": yt-dlp always ranks language first, so the LAST
-            # item is the least-preferred language (a dubbed track).
-            # bestaudio + "+abr" = original language, lowest bitrate.
+            report(0, "Starting audio download")
+            audio_path, info, _ = download_stream(
+                "bestaudio/best", "audio", 0, 88, "Downloading audio"
+            )
+
+            report(90, "Converting to MP3…")
+            from com.mrrwhoo1.multidl import FfmpegBridge
+
+            mp3_path = os.path.splitext(audio_path)[0] + ".mp3"
+            command = (
+                f'-y -i "{audio_path}" -vn -codec:a libmp3lame -b:a 192k "{mp3_path}"'
+            )
+
+            result = str(FfmpegBridge.execute(command))
+
+            if (
+                not result.startswith("SUCCESS")
+                or not os.path.isfile(mp3_path)
+                or os.path.getsize(mp3_path) == 0
+            ):
+                raise RuntimeError(f"MP3 conversion failed: {result[-700:]}")
+
+            if os.path.abspath(audio_path) != os.path.abspath(mp3_path):
+                os.remove(audio_path)
+
+            # Rename the finished MP3 from "<id>_audio.mp3" to "<title>.mp3".
+            final_path = os.path.join(
+                output_path,
+                safe_filename(info.get("title"), info.get("id", "audio")) + ".mp3",
+            )
+            if os.path.abspath(mp3_path) != os.path.abspath(final_path):
+                os.replace(mp3_path, final_path)
+
+            report(100, "Complete")
+            return {
+                "success": True,
+                "title": info.get("title", "Unknown audio"),
+                "file_path": final_path,
+            }
+
+        # Download separate video and audio streams.
+        label = " (Data Saver)" if f == "Data Saver" else ""
+
+        if f == "Data Saver":
             # "/worst" fallback: some sites (often Facebook) only offer one
-            # combined video+audio file.
-            options["format"] = "worstvideo+bestaudio/worst"
-            options["format_sort"] = ["+abr"]
-            options["merge_output_format"] = "mp4"
+            # combined video+audio file, which the video-only selectors miss
+            video_format = "worstvideo/worst"
+            # NOT "worstaudio": yt-dlp always ranks language first, so the
+            # LAST item is the least-preferred language (a dubbed track).
+            # bestaudio + "+abr" = original language, lowest bitrate.
+            # The previous code especially for youtube would end up giving me the low res video in a different language. apparently this should solve it, thanks claude :)
+            audio_format = "bestaudio/best"
+            audio_sort = ["+abr"]
         else:
-            options["format"] = "bestvideo+bestaudio/best"
-            options["merge_output_format"] = "mp4"
+            video_format = "bestvideo/best"
+            audio_format = "bestaudio/best"
+            audio_sort = None
 
-        started_at = time.time()
-        report(0, "Starting download")
+        report(0, "Starting video download")
+        video_path, info, video_fmt = download_stream(
+            video_format, "video", 0, 44, "Downloading video"
+        )
 
-        with _Downloader(options) as ydl:
-            info = ydl.extract_info(url, download=True)
+        title_name = safe_filename(info.get("title"), info.get("id", "video"))
 
-        final_path = None
-        for item in info.get("requested_downloads") or []:
-            path = item.get("filepath")
-            if path and os.path.isfile(path):
-                final_path = path
-                break
+        """
+        TO BE HONEST I MYSELF CAN BARELY UNDERSTAND MOST OF THE CODE BELOW, AUDIO HAS NEVER BEEN MY STRONG SUIT. TRIED TO EXPLAIN AS BEST AS I COULD.
+        """
 
-        if final_path is None:
-            final_path = _newest_new_file(output_path, started_at)
+        # If the "video" file already contains sound, there is nothing to merge.
+        # Only skip when yt-dlp reports REAL codecs for both streams; if the
+        # codecs are unknown we merge as before so we never save a silent video.
+        vcodec = video_fmt.get("vcodec")
+        acodec = video_fmt.get("acodec")
+        already_has_audio = vcodec not in (None, "none") and acodec not in (
+            None,
+            "none",
+        )
 
-        if final_path is None:
-            raise FileNotFoundError("The downloaded file was not found.")
+        if already_has_audio:
+            report(95, "Finishing…")
+            extension = os.path.splitext(video_path)[1] or ".mp4"
+            final_path = os.path.join(output_path, title_name + label + extension)
+            if os.path.abspath(video_path) != os.path.abspath(final_path):
+                os.replace(video_path, final_path)
+
+            report(100, "Complete")
+            return {
+                "success": True,
+                "title": info.get("title", "Unknown video"),
+                "file_path": final_path,
+            }
+
+        audio_path, _, _ = download_stream(
+            audio_format, "audio", 45, 88, "Downloading audio", sort=audio_sort
+        )
+
+        report(90, "Merging video and audio…")
+        from com.mrrwhoo1.multidl import FfmpegBridge
+
+        # MKV can contain a wider range of video/audio codecs without
+        # requiring a potentially slow video re-encode. BUT this will probably affect most older android phones.
+        # until then i will keep it.
+        suffix = "data_saver" if f == "Data Saver" else "hd"
+        merged_path = os.path.join(
+            output_path, f"{info.get('id', 'video')}_{suffix}.mkv"
+        )
+
+        command = (
+            f'-y -i "{video_path}" -i "{audio_path}" '
+            f"-map 0:v:0 -map 1:a:0 "
+            f'-c copy "{merged_path}"'
+        )
+
+        result = str(FfmpegBridge.execute(command))
+
+        if (
+            not result.startswith("SUCCESS")
+            or not os.path.isfile(merged_path)
+            or os.path.getsize(merged_path) == 0
+        ):
+            raise RuntimeError(f"Video/audio merge failed: {result[-700:]}")
+
+        # Delete the separate streams only after a successful merge, did this obviosuly to save storage.
+        for path in (video_path, audio_path):
+            if os.path.abspath(path) != os.path.abspath(merged_path):
+                if os.path.isfile(path):
+                    os.remove(path)
+
+        # Rename "<id>_hd.mkv" to "<title>.mkv" (Data Saver gets a label
+        # so it never overwrites an HD copy of the same video).
+        final_path = os.path.join(output_path, title_name + label + ".mkv")
+        if os.path.abspath(merged_path) != os.path.abspath(final_path):
+            os.replace(merged_path, final_path)
 
         report(100, "Complete")
         return {
@@ -247,7 +416,20 @@ def download(f, url, progress_hook=None, output_path=None):
         }
 
     except Exception as e:
-        # Put the real reason in the result: error text, any yt-dlp warnings
+        # Was this a deliberate Pause / Cancel? Check the flag instead of the exception
+        # type, because yt-dlp sometimes re-wraps errors raised inside hooks.
+        stop_reason = _stop_requests.pop(download_id, None)
+        if stop_reason:
+            if stop_reason == "cancel":
+                _delete_partial_files(download_id)
+            return {
+                "success": False,
+                "stopped": stop_reason,
+                "title": "",
+                "file_path": "",
+            }
+
+        # Put the real reason on screen: error text, any yt-dlp warnings
         # (e.g. "login required"), and which yt-dlp version is running.
         message = str(e).strip() or e.__class__.__name__
         notes = " | ".join(logger.warnings[-3:])
@@ -259,3 +441,100 @@ def download(f, url, progress_hook=None, output_path=None):
             "title": f"{message[:500]} (yt-dlp {ytdlp_version.__version__})",
             "file_path": "",
         }
+
+
+# ---- Playlist support -------------------------------------------------------
+# Kotlin calls list_playlist() with the link exactly as it was pasted. It must NOT go
+# through clean_url(), which would throw away the list= part. Nothing is downloaded
+# here: this only reads the playlist's contents. Kotlin then queues every entry as a
+# normal single-video download, so the rest of this file works exactly as before.
+
+MAX_PLAYLIST_ITEMS = 200
+
+
+def _playlist_url(url):
+    """Turns watch?v=abc&list=xyz into https://www.youtube.com/playlist?list=xyz."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+
+    is_youtube = (
+        host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+    )
+    if is_youtube:
+        list_id = dict(parse_qsl(parsed.query)).get("list")
+        if list_id:
+            return "https://www.youtube.com/playlist?" + urlencode({"list": list_id})
+
+    return url
+
+
+def list_playlist(url):
+    """
+    Returns a JSON string (easy for Kotlin to read):
+    {"success": true, "title": "...", "truncated": false,
+     "entries": [{"title": "...", "url": "https://..."}, ...]}
+    or {"success": false, "error": "..."} when something went wrong.
+    """
+    logger = _CollectLogger()
+
+    try:
+        options = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            # "in_playlist" = only read the list of videos, do not open every video page.
+            "extract_flat": "in_playlist",
+            "noplaylist": False,
+            "playlistend": MAX_PLAYLIST_ITEMS
+            + 1,  # +1 so we can tell if there were more
+            "retries": 3,
+            "extractor_retries": 3,
+            "socket_timeout": 30,
+            "logger": logger,
+        }
+
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(_playlist_url(url.strip()), download=False)
+
+        entries = []
+        for entry in list(info.get("entries") or []):
+            if not entry:
+                continue
+
+            title = (entry.get("title") or "").strip()
+
+            # Videos that were removed or made private cannot be downloaded.
+            if title in ("[Private video]", "[Deleted video]"):
+                continue
+
+            link = entry.get("url") or entry.get("webpage_url") or ""
+            if not link.startswith("http") and entry.get("id"):
+                link = f"https://www.youtube.com/watch?v={entry['id']}"
+            if not link.startswith("http"):
+                continue
+
+            entries.append({"title": title, "url": link})
+
+        truncated = len(entries) > MAX_PLAYLIST_ITEMS
+
+        return json.dumps(
+            {
+                "success": True,
+                "title": info.get("title") or "",
+                "truncated": truncated,
+                "entries": entries[:MAX_PLAYLIST_ITEMS],
+            }
+        )
+
+    except Exception as e:
+        message = str(e).strip() or e.__class__.__name__
+        notes = " | ".join(logger.warnings[-3:])
+        if notes:
+            message = f"{message} [{notes}]"
+
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"{message[:500]} (yt-dlp {ytdlp_version.__version__})",
+            }
+                         )
